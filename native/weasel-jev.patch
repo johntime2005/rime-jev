@@ -1,0 +1,381 @@
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index 3f4e59d..88225a3 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -1,4 +1,4 @@
+-﻿#include "stdafx.h"
++#include "stdafx.h"
+ #include <logging.h>
+ #include <RimeWithWeasel.h>
+ #include <StringAlgorithm.hpp>
+@@ -385,6 +385,33 @@ bool RimeWithWeaselHandler::ChangePage(bool backward,
+   return res;
+ }
+ 
++bool RimeWithWeaselHandler::JevRefresh(DWORD ipc_id, EatLine eat) {
++  auto it = m_session_status_map.find(ipc_id);
++  if (m_disabled || !ipc_id || m_active_session != ipc_id || it == m_session_status_map.end())
++    return false;
++  auto session = it->second.session_id;
++  RIME_STRUCT(RimeStatus, status);
++  if (!rime_api->get_status(session, &status)) return false;
++  bool eligible = status.is_composing && !status.is_ascii_mode && status.schema_id &&
++                  std::string(status.schema_id) == "rime_ice_jev";
++  rime_api->free_status(&status);
++  if (!eligible) return false;
++  RIME_STRUCT(RimeContext, context);
++  if (!rime_api->get_context(session, &context)) return false;
++  eligible = context.menu.page_no == 0 && context.menu.highlighted_candidate_index == 0;
++  rime_api->free_context(&context);
++  if (!eligible) return false;
++  // This runs under the normal IPC mutex, never on a foreign Lua thread.
++  auto serial = std::to_string(++m_jev_serial);
++  rime_api->set_property(session, "jev_refresh", serial.c_str());
++  char ack[32] = {};
++  if (!rime_api->get_property(session, "jev_refresh_ack", ack, sizeof(ack)) || serial != ack)
++    return false;
++  _Respond(ipc_id, eat);
++  _UpdateUI(ipc_id);
++  return true;
++}
++
+ void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
+   DLOG(INFO) << "Focus in: ipc_id = " << ipc_id
+              << ", client_caps = " << client_caps;
+@@ -398,6 +425,9 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
+   DLOG(INFO) << "Focus out: ipc_id = " << ipc_id;
+   if (m_ui)
+     m_ui->Hide();
++  auto it = m_session_status_map.find(ipc_id);
++  if (!m_disabled && it != m_session_status_map.end())
++    rime_api->set_property(it->second.session_id, "jev_focus_epoch", std::to_string(++m_jev_serial).c_str());
+   m_active_session = 0;
+ }
+ 
+diff --git a/WeaselIPC/WeaselClientImpl.cpp b/WeaselIPC/WeaselClientImpl.cpp
+index 26122ad..5113ffa 100644
+--- a/WeaselIPC/WeaselClientImpl.cpp
++++ b/WeaselIPC/WeaselClientImpl.cpp
+@@ -1,4 +1,4 @@
+-﻿#include "stdafx.h"
++#include "stdafx.h"
+ #include "WeaselClientImpl.h"
+ #include <StringAlgorithm.hpp>
+ 
+@@ -96,6 +96,10 @@ bool ClientImpl::HighlightCandidateOnCurrentPage(size_t index) {
+   return ret != 0;
+ }
+ 
++bool ClientImpl::JevRefresh() {
++  return _Active() && _SendMessage(WEASEL_IPC_JEV_REFRESH, 0, session_id) != 0;
++}
++
+ bool ClientImpl::ChangePage(bool backward) {
+   if (!_Active())
+     return false;
+@@ -240,6 +244,8 @@ bool Client::HighlightCandidateOnCurrentPage(size_t index) {
+   return m_pImpl->HighlightCandidateOnCurrentPage(index);
+ }
+ 
++bool Client::JevRefresh() { return m_pImpl->JevRefresh(); }
++
+ bool Client::ChangePage(bool backward) {
+   return m_pImpl->ChangePage(backward);
+ }
+diff --git a/WeaselIPC/WeaselClientImpl.h b/WeaselIPC/WeaselClientImpl.h
+index 7602792..12e2bb1 100644
+--- a/WeaselIPC/WeaselClientImpl.h
++++ b/WeaselIPC/WeaselClientImpl.h
+@@ -23,6 +23,7 @@ class ClientImpl {
+   bool SelectCandidateOnCurrentPage(size_t index);
+   bool HighlightCandidateOnCurrentPage(size_t index);
+   bool ChangePage(bool backward);
++  bool JevRefresh();
+   void UpdateInputPosition(RECT const& rc);
+   void FocusIn();
+   void FocusOut();
+diff --git a/WeaselIPCServer/WeaselServerImpl.cpp b/WeaselIPCServer/WeaselServerImpl.cpp
+index 11225c4..a8f1780 100644
+--- a/WeaselIPCServer/WeaselServerImpl.cpp
++++ b/WeaselIPCServer/WeaselServerImpl.cpp
+@@ -1,4 +1,4 @@
+-﻿#include "stdafx.h"
++#include "stdafx.h"
+ #include "WeaselServerImpl.h"
+ #include <mutex>
+ #include <Windows.h>
+@@ -225,6 +225,14 @@ DWORD ServerImpl::OnKeyEvent(WEASEL_IPC_COMMAND uMsg,
+   return m_pRequestHandler->ProcessKeyEvent(KeyEvent(wParam), lParam, eat);
+ }
+ 
++DWORD ServerImpl::OnJevRefresh(WEASEL_IPC_COMMAND, DWORD, DWORD session) {
++  if (!m_pRequestHandler) return 0;
++  return m_pRequestHandler->JevRefresh(session, [this](std::wstring& msg) {
++    *channel << msg;
++    return true;
++  });
++}
++
+ DWORD ServerImpl::OnShutdownServer(WEASEL_IPC_COMMAND uMsg,
+                                    DWORD wParam,
+                                    DWORD lParam) {
+@@ -379,6 +387,7 @@ void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
+   DWORD result;
+ 
+   MAP_PIPE_MSG_HANDLE(pipe_msg.Msg, pipe_msg.wParam, pipe_msg.lParam)
++  PIPE_MSG_HANDLE(WEASEL_IPC_JEV_REFRESH, OnJevRefresh)
+   PIPE_MSG_HANDLE(WEASEL_IPC_ECHO, OnEcho)
+   PIPE_MSG_HANDLE(WEASEL_IPC_START_SESSION, OnStartSession)
+   PIPE_MSG_HANDLE(WEASEL_IPC_END_SESSION, OnEndSession)
+diff --git a/WeaselIPCServer/WeaselServerImpl.h b/WeaselIPCServer/WeaselServerImpl.h
+index a4d123d..6b455e6 100644
+--- a/WeaselIPCServer/WeaselServerImpl.h
++++ b/WeaselIPCServer/WeaselServerImpl.h
+@@ -70,6 +70,7 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
+                                           DWORD wParam,
+                                           DWORD lParam);
+   DWORD OnChangePage(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
++  DWORD OnJevRefresh(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
+ 
+  public:
+   ServerImpl();
+diff --git a/WeaselTSF/CandidateList.cpp b/WeaselTSF/CandidateList.cpp
+index 7c1e850..7ae6c42 100644
+--- a/WeaselTSF/CandidateList.cpp
++++ b/WeaselTSF/CandidateList.cpp
+@@ -13,7 +13,20 @@ CCandidateList::CCandidateList(com_ptr<WeaselTSF> pTextService)
+   _cRef = 1;
+ }
+ 
+-CCandidateList::~CCandidateList() {}
++CCandidateList::~CCandidateList() { JevStopTimer(); }
++
++thread_local std::map<UINT_PTR, CCandidateList*> CCandidateList::_jev_timers;
++void CCandidateList::JevStopTimer() {
++  if (_jev_timer) {
++    KillTimer(NULL, _jev_timer);
++    _jev_timers.erase(_jev_timer);
++    _jev_timer = 0;
++  }
++}
++void CALLBACK CCandidateList::JevTimer(HWND, UINT, UINT_PTR id, DWORD) {
++  auto it = _jev_timers.find(id);
++  if (it != _jev_timers.end()) it->second->_tsf->JevPoll();
++}
+ 
+ STDMETHODIMP CCandidateList::QueryInterface(REFIID riid, void** ppvObj) {
+   if (ppvObj == nullptr) {
+@@ -199,6 +212,14 @@ STDMETHODIMP CCandidateList::FinalizeExactCompositionString() {
+ }
+ 
+ void CCandidateList::UpdateUI(const Context& ctx, const Status& status) {
++  bool pending = status.composing && status.schema_id == L"rime_ice_jev" &&
++      ctx.cinfo.currentPage == 0 && ctx.cinfo.highlighted == 0 &&
++      !ctx.cinfo.comments.empty() &&
++      ctx.cinfo.comments[0].str.find(L"[Jev: pending]") != std::wstring::npos;
++  if (pending && !_jev_timer) {
++    _jev_timer = SetTimer(NULL, 0, 100, &CCandidateList::JevTimer);
++    if (_jev_timer) _jev_timers[_jev_timer] = this;
++  } else if (!pending) JevStopTimer();
+   if (_ui->style().inline_preedit) {
+     _ui->style().client_caps |= weasel::INLINE_PREEDIT_CAPABLE;
+   } else {
+@@ -227,12 +248,14 @@ void CCandidateList::UpdateInputPosition(RECT const& rc) {
+ }
+ 
+ void CCandidateList::Destroy() {
++  JevStopTimer();
+   // EndUI();
+   Show(FALSE);
+   _DisposeUIWindow();
+ }
+ 
+ void CCandidateList::DestroyAll() {
++  JevStopTimer();
+   // EndUI();
+   Show(FALSE);
+   _DisposeUIWindowAll();
+@@ -312,6 +335,7 @@ void CCandidateList::StartUI() {
+ }
+ 
+ void CCandidateList::EndUI() {
++  JevStopTimer();
+   com_ptr<ITfThreadMgr> pThreadMgr = _tsf->_GetThreadMgr();
+   if (pThreadMgr) {
+     com_ptr<ITfUIElementMgr> emgr;
+@@ -433,6 +457,7 @@ void WeaselTSF::HandleUICallback(size_t* const sel,
+                                  size_t* const hov,
+                                  bool* const next,
+                                  bool* const scroll_next) {
++  ++_jev_generation;
+   if (sel)
+     _SelectCandidateOnCurrentPage(*sel);
+   else if (hov)
+diff --git a/WeaselTSF/CandidateList.h b/WeaselTSF/CandidateList.h
+index 648732c..77a50d1 100644
+--- a/WeaselTSF/CandidateList.h
++++ b/WeaselTSF/CandidateList.h
+@@ -76,6 +76,10 @@ class CCandidateList : public ITfIntegratableCandidateListUIElement,
+   // for CCandidateList::Destroy(), when inputing app exit
+   void _DisposeUIWindowAll();
+   void _MakeUIWindow();
++  void JevStopTimer();
++  static void CALLBACK JevTimer(HWND, UINT, UINT_PTR, DWORD);
++  UINT_PTR _jev_timer = 0;
++  static thread_local std::map<UINT_PTR, CCandidateList*> _jev_timers;
+ 
+   std::unique_ptr<weasel::UI> _ui;
+   DWORD _cRef;
+diff --git a/WeaselTSF/EditSession.cpp b/WeaselTSF/EditSession.cpp
+index 8f4d503..8235c3b 100644
+--- a/WeaselTSF/EditSession.cpp
++++ b/WeaselTSF/EditSession.cpp
+@@ -2,6 +2,7 @@
+ #include "WeaselTSF.h"
+ #include "CandidateList.h"
+ #include "ResponseParser.h"
++#include "EditSession.h"
+ 
+ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
+   // get commit string from server
+@@ -45,3 +46,48 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
+ 
+   return TRUE;
+ }
++
++// A timer only requests an edit session. Rime mutation and UI refresh happen
++// together on this TSF apartment, after Windows grants the document lock.
++class CJevEditSession : public CEditSession {
++ public:
++  CJevEditSession(WeaselTSF* tsf, ITfContext* context, unsigned long long generation)
++      : CEditSession(tsf, context), generation_(generation) {}
++  STDMETHODIMP DoEditSession(TfEditCookie ec) override {
++    return _pTextService->JevEdit(ec, _pContext, generation_);
++  }
++ private:
++  unsigned long long generation_;
++};
++
++void WeaselTSF::JevPoll() {
++  if (_jev_pending || !_status.composing || !_IsComposing() || !_pThreadMgr ||
++      _fTestKeyDownPending || _fTestKeyUpPending || _IsKeyboardDisabled() ||
++      (_isToOpenClose && !_IsKeyboardOpen())) return;
++  com_ptr<ITfDocumentMgr> doc;
++  com_ptr<ITfContext> context;
++  if (FAILED(_pThreadMgr->GetFocus(&doc)) || !doc || FAILED(doc->GetTop(&context)) ||
++      !context || context != _pEditSessionContext) return;
++  _jev_pending = true;
++  auto edit = new CJevEditSession(this, context, _jev_generation);
++  HRESULT result = E_FAIL;
++  HRESULT hr = context->RequestEditSession(_tfClientId, edit, TF_ES_ASYNC | TF_ES_READWRITE, &result);
++  edit->Release();
++  if (FAILED(hr) || FAILED(result)) _jev_pending = false;
++}
++
++HRESULT WeaselTSF::JevEdit(TfEditCookie ec, ITfContext* context, unsigned long long generation) {
++  _jev_pending = false;
++  if (generation != _jev_generation || !_pThreadMgr || !_IsComposing() ||
++      !_status.composing || _fTestKeyDownPending || _fTestKeyUpPending ||
++      _IsKeyboardDisabled() || (_isToOpenClose && !_IsKeyboardOpen())) return S_OK;
++  com_ptr<ITfDocumentMgr> doc;
++  com_ptr<ITfContext> focused;
++  if (FAILED(_pThreadMgr->GetFocus(&doc)) || !doc || FAILED(doc->GetTop(&focused)) ||
++      !focused || focused.p != context || focused != _pEditSessionContext) return S_OK;
++  DWORD pid = 0;
++  GetWindowThreadProcessId(GetForegroundWindow(), &pid);
++  if (pid != GetCurrentProcessId()) return S_OK;
++  if (m_client.JevRefresh()) return DoEditSession(ec);
++  return S_OK;
++}
+diff --git a/WeaselTSF/KeyEventSink.cpp b/WeaselTSF/KeyEventSink.cpp
+index c885ddd..95e4af4 100644
+--- a/WeaselTSF/KeyEventSink.cpp
++++ b/WeaselTSF/KeyEventSink.cpp
+@@ -9,6 +9,7 @@ static BOOL prevfEaten = FALSE;
+ static int keyCountToSimulate = 0;
+ 
+ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
++  ++_jev_generation;
+   // when _IsKeyboardDisabled don't eat the key,
+   // when keyboard closable and keyboard closed, don't eat the key
+   if ((_isToOpenClose && !_IsKeyboardOpen()) || _IsKeyboardDisabled()) {
+@@ -63,6 +64,7 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
+ }
+ 
+ STDAPI WeaselTSF::OnSetFocus(BOOL fForeground) {
++  ++_jev_generation;
+   if (fForeground)
+     m_client.FocusIn();
+   else {
+diff --git a/WeaselTSF/WeaselTSF.h b/WeaselTSF/WeaselTSF.h
+index 696d3cc..dbe6d1a 100644
+--- a/WeaselTSF/WeaselTSF.h
++++ b/WeaselTSF/WeaselTSF.h
+@@ -147,6 +147,8 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+   BOOL _InitDisplayAttributeGuidAtom();
+ 
+   com_ptr<ITfThreadMgr> _GetThreadMgr() { return _pThreadMgr; }
++  void JevPoll();
++  HRESULT JevEdit(TfEditCookie ec, ITfContext* context, unsigned long long generation);
+   void HandleUICallback(size_t* const sel,
+                         size_t* const hov,
+                         bool* const next,
+@@ -233,4 +235,6 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+   BOOL _async_edit = false;
+   BOOL _committed = false;
+   BOOL _isToOpenClose = false;
++  unsigned long long _jev_generation = 0;
++  bool _jev_pending = false;
+ };
+diff --git a/include/RimeWithWeasel.h b/include/RimeWithWeasel.h
+index 6fb0a4c..90800fb 100644
+--- a/include/RimeWithWeasel.h
++++ b/include/RimeWithWeasel.h
+@@ -61,6 +61,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+                          const std::string& opt,
+                          bool val);
+   virtual void UpdateColorTheme(BOOL darkMode);
++  bool JevRefresh(DWORD ipc_id, EatLine eat) override;
+ 
+   void OnUpdateUI(std::function<void()> const& cb);
+ 
+@@ -119,4 +120,5 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+   bool m_global_ascii_mode;
+   int m_show_notifications_time;
+   DWORD m_pid;
++  unsigned long long m_jev_serial = 0;
+ };
+diff --git a/include/WeaselIPC.h b/include/WeaselIPC.h
+index 3065cb5..3e4cce9 100644
+--- a/include/WeaselIPC.h
++++ b/include/WeaselIPC.h
+@@ -1,4 +1,4 @@
+-﻿#pragma once
++#pragma once
+ #include <WeaselIPCData.h>
+ #include <WeaselUtility.h>
+ #include <windows.h>
+@@ -32,6 +32,7 @@ enum WEASEL_IPC_COMMAND {
+   WEASEL_IPC_SELECT_CANDIDATE_ON_CURRENT_PAGE,
+   WEASEL_IPC_HIGHLIGHT_CANDIDATE_ON_CURRENT_PAGE,
+   WEASEL_IPC_CHANGE_PAGE,
++  WEASEL_IPC_JEV_REFRESH = WM_APP + 0x4a0,
+   WEASEL_IPC_LAST_COMMAND
+ };
+ 
+@@ -81,6 +82,7 @@ struct RequestHandler {
+   virtual void EndMaintenance() {}
+   virtual void SetOption(DWORD session_id, const std::string& opt, bool val) {}
+   virtual void UpdateColorTheme(BOOL darkMode) {}
++  virtual bool JevRefresh(DWORD session_id, EatLine eat) { return false; }
+ };
+ 
+ // 處理server端回應之物件
+@@ -132,6 +134,7 @@ class Client {
+   bool HighlightCandidateOnCurrentPage(size_t index);
+   // 翻页，backward = true 向前翻，false向后翻
+   bool ChangePage(bool backward);
++  bool JevRefresh();
+   // 更新输入位置
+   void UpdateInputPosition(RECT const& rc);
+   // 输入窗口获得焦点

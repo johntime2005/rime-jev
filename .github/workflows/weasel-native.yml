@@ -1,0 +1,40 @@
+name: Build Jev Weasel
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: microsoft/setup-msbuild@v2
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Prepare pinned upstream
+        run: python scripts/Prepare-Weasel.py
+      - uses: actions/cache@v4
+        with:
+          path: upstream/weasel/deps/boost_1_84_0
+          key: boost-1.84-msvc143-x64-mt-static-v1
+      - name: Build native components
+        shell: pwsh
+        run: ./scripts/Build-Weasel.ps1
+      - name: Unit tests
+        run: node --test tests/bridge.test.mjs tests/provider.test.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weasel-jev-x64-experimental
+          path: |
+            upstream/weasel/output/WeaselServer.exe
+            upstream/weasel/output/weaselx64.dll
+            native/weasel-jev.patch
+            native/LICENSE-GPL-3.0.txt
+            native/README.md
+            lua/jev_windows.lua
+          if-no-files-found: error

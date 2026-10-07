@@ -211,6 +211,7 @@ function M.processor.init(env)
       state.history = tail(state.history .. text, 80)
     end
     state.history_at, state.snapshot = os.time(), nil
+    state.attempted, state.paused = nil, nil
   end)
   env.update = ctx.update_notifier:connect(function(c)
     if state.snapshot and (c.input ~= state.snapshot.input or c.caret_pos ~= state.snapshot.caret) then
@@ -220,10 +221,29 @@ function M.processor.init(env)
   env.option = ctx.option_update_notifier:connect(function(_, name)
     if name == 'ascii_mode' then clear(state) end
   end)
+  env.property = ctx.property_update_notifier:connect(function(c, name)
+    if name == 'jev_focus_epoch' then
+      clear(state)
+    elseif name == 'jev_refresh' then
+      local success = pcall(function()
+        settings(state)
+        if state.enabled and state.pending and state.snapshot and not state.paused
+          and not c:get_option('ascii_mode') and first_page(c)
+          and c.input == state.snapshot.input and c.caret_pos == state.snapshot.caret then
+          consume(state)
+          if not state.pending then
+            refresh(c)
+            c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
+          end
+        end
+      end)
+      if not success then clear(state) end
+    end
+  end)
 end
 
 function M.processor.fini(env)
-  for _, name in ipairs({ 'commit', 'update', 'option' }) do
+  for _, name in ipairs({ 'commit', 'update', 'option', 'property' }) do
     if env[name] then env[name]:disconnect(); env[name] = nil end
   end
   release(env)
