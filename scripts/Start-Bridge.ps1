@@ -13,9 +13,15 @@ if (-not $Foreground) {
 $secretFile = Join-Path $data 'key.dpapi'
 try {
     if (Test-Path -LiteralPath $secretFile) {
-        $secure = Get-Content -LiteralPath $secretFile -Raw | ConvertTo-SecureString
-        $cred = New-Object System.Net.NetworkCredential('', $secure)
-        $env:TYPESAFE_API_KEY = $cred.Password
+        try {
+            $secure = (Get-Content -LiteralPath $secretFile -Raw).Trim() | ConvertTo-SecureString
+            $cred = New-Object System.Net.NetworkCredential('', $secure)
+            $env:TYPESAFE_API_KEY = $cred.Password
+        } catch {
+            # Never print the stored value or attempt to interpret it as plaintext.
+            Remove-Item Env:TYPESAFE_API_KEY -ErrorAction SilentlyContinue
+            Write-Warning 'Stored key cannot be decrypted. Starting without it; use Configure.cmd to replace it.'
+        }
     }
     & $node (Join-Path $project 'bridge.mjs') $data 2>> (Join-Path $data 'bridge-errors.log')
 } finally {
