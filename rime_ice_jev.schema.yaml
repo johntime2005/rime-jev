@@ -1,0 +1,14 @@
+schema:
+  schema_id: rime_ice_jev
+  name: "\u96fe\u51c7\u62fc\u97f3 - Jev"
+  version: "1.0"
+__include: rime_ice.schema:/
+__patch:
+  schema/schema_id: rime_ice_jev
+  schema/name: "\u96fe\u51c7\u62fc\u97f3 - Jev"
+  schema/version: "1.0"
+  # Share the existing dictionary and user vocabulary, not a new language model.
+  translator/dictionary: rime_ice
+  translator/prism: rime_ice
+  engine/processors/@before 0: lua_processor@*jev_windows*processor
+  engine/filters/@next: lua_filter@*jev_windows*filter
