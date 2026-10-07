@@ -1,5 +1,5 @@
 diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
-index 3f4e59d..88225a3 100644
+index 3f4e59d..85311a8 100644
 --- a/RimeWithWeasel/RimeWithWeasel.cpp
 +++ b/RimeWithWeasel/RimeWithWeasel.cpp
 @@ -1,4 +1,4 @@
@@ -8,7 +8,22 @@ index 3f4e59d..88225a3 100644
  #include <logging.h>
  #include <RimeWithWeasel.h>
  #include <StringAlgorithm.hpp>
-@@ -385,6 +385,33 @@ bool RimeWithWeaselHandler::ChangePage(bool backward,
+@@ -367,6 +367,7 @@ bool RimeWithWeaselHandler::HighlightCandidateOnCurrentPage(
+     EatLine eat) {
+   DLOG(INFO) << "highlight candidate on current page, ipc_id = " << ipc_id
+              << ", index = " << index;
++  rime_api->set_property(to_session_id(ipc_id), "jev_manual_selection", std::to_string(++m_jev_serial).c_str());
+   bool res = rime_api->highlight_candidate_on_current_page(
+       to_session_id(ipc_id), index);
+   _Respond(ipc_id, eat);
+@@ -379,12 +380,40 @@ bool RimeWithWeaselHandler::ChangePage(bool backward,
+                                        EatLine eat) {
+   DLOG(INFO) << "change page, ipc_id = " << ipc_id
+              << (backward ? "backward" : "foreward");
++  rime_api->set_property(to_session_id(ipc_id), "jev_manual_selection", std::to_string(++m_jev_serial).c_str());
+   bool res = rime_api->change_page(to_session_id(ipc_id), backward);
+   _Respond(ipc_id, eat);
+   _UpdateUI(ipc_id);
    return res;
  }
  
@@ -42,7 +57,7 @@ index 3f4e59d..88225a3 100644
  void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
    DLOG(INFO) << "Focus in: ipc_id = " << ipc_id
               << ", client_caps = " << client_caps;
-@@ -398,6 +425,9 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
+@@ -398,6 +427,9 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
    DLOG(INFO) << "Focus out: ipc_id = " << ipc_id;
    if (m_ui)
      m_ui->Hide();
@@ -227,7 +242,7 @@ index 648732c..77a50d1 100644
    std::unique_ptr<weasel::UI> _ui;
    DWORD _cRef;
 diff --git a/WeaselTSF/EditSession.cpp b/WeaselTSF/EditSession.cpp
-index 8f4d503..8235c3b 100644
+index 8f4d503..ace9335 100644
 --- a/WeaselTSF/EditSession.cpp
 +++ b/WeaselTSF/EditSession.cpp
 @@ -2,6 +2,7 @@
@@ -238,7 +253,18 @@ index 8f4d503..8235c3b 100644
  
  STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
    // get commit string from server
-@@ -45,3 +46,48 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
+@@ -41,7 +42,74 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
+     _UpdateCompositionWindow(_pEditSessionContext);
+   }
+ 
++  _jev_selection.Release();
++  TF_SELECTION selection = {};
++  ULONG fetched = 0;
++  if (_status.composing && _pEditSessionContext &&
++      SUCCEEDED(_pEditSessionContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) && fetched == 1) {
++    _jev_selection.Attach(selection.range);
++  }
+   _UpdateUI(*context, _status);
  
    return TRUE;
  }
@@ -284,6 +310,21 @@ index 8f4d503..8235c3b 100644
 +  DWORD pid = 0;
 +  GetWindowThreadProcessId(GetForegroundWindow(), &pid);
 +  if (pid != GetCurrentProcessId()) return S_OK;
++  // Moving the application caret invalidates a queued refresh, even if Rime
++  // still has the old pinyin. Compare ranges; never read surrounding text.
++  TF_SELECTION selection = {};
++  ULONG fetched = 0;
++  if (!_jev_selection || FAILED(context->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched != 1)
++    return S_OK;
++  com_ptr<ITfRange> current;
++  current.Attach(selection.range);
++  LONG start = 1, end = 1;
++  if (FAILED(current->CompareStart(ec, _jev_selection, TF_ANCHOR_START, &start)) ||
++      FAILED(current->CompareEnd(ec, _jev_selection, TF_ANCHOR_END, &end)) || start || end) {
++    ++_jev_generation;
++    m_client.FocusOut();
++    return S_OK;
++  }
 +  if (m_client.JevRefresh()) return DoEditSession(ec);
 +  return S_OK;
 +}
@@ -307,8 +348,40 @@ index c885ddd..95e4af4 100644
    if (fForeground)
      m_client.FocusIn();
    else {
+diff --git a/WeaselTSF/ThreadMgrEventSink.cpp b/WeaselTSF/ThreadMgrEventSink.cpp
+index a46ca37..5dcf7ce 100644
+--- a/WeaselTSF/ThreadMgrEventSink.cpp
++++ b/WeaselTSF/ThreadMgrEventSink.cpp
+@@ -11,6 +11,8 @@ STDAPI WeaselTSF::OnUninitDocumentMgr(ITfDocumentMgr* pDocMgr) {
+ 
+ STDAPI WeaselTSF::OnSetFocus(ITfDocumentMgr* pDocMgrFocus,
+                              ITfDocumentMgr* pDocMgrPrevFocus) {
++  ++_jev_generation;
++  if (pDocMgrFocus != pDocMgrPrevFocus) m_client.FocusOut();
+   _InitTextEditSink(pDocMgrFocus);
+ 
+   com_ptr<ITfDocumentMgr> pCandidateListDocumentMgr;
+diff --git a/WeaselTSF/WeaselTSF.cpp b/WeaselTSF/WeaselTSF.cpp
+index 590d3b8..374ed4d 100644
+--- a/WeaselTSF/WeaselTSF.cpp
++++ b/WeaselTSF/WeaselTSF.cpp
+@@ -1,4 +1,4 @@
+-﻿#include "stdafx.h"
++#include "stdafx.h"
+ 
+ #include <WeaselIPCData.h>
+ #include <thread>
+@@ -183,6 +183,8 @@ STDMETHODIMP WeaselTSF::OnSetThreadFocus() {
+   return S_OK;
+ }
+ STDMETHODIMP WeaselTSF::OnKillThreadFocus() {
++  ++_jev_generation;
++  m_client.FocusOut();
+   _AbortComposition();
+   return S_OK;
+ }
 diff --git a/WeaselTSF/WeaselTSF.h b/WeaselTSF/WeaselTSF.h
-index 696d3cc..dbe6d1a 100644
+index 696d3cc..d40875a 100644
 --- a/WeaselTSF/WeaselTSF.h
 +++ b/WeaselTSF/WeaselTSF.h
 @@ -147,6 +147,8 @@ class WeaselTSF : public ITfTextInputProcessorEx,
@@ -320,12 +393,13 @@ index 696d3cc..dbe6d1a 100644
    void HandleUICallback(size_t* const sel,
                          size_t* const hov,
                          bool* const next,
-@@ -233,4 +235,6 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+@@ -233,4 +235,7 @@ class WeaselTSF : public ITfTextInputProcessorEx,
    BOOL _async_edit = false;
    BOOL _committed = false;
    BOOL _isToOpenClose = false;
 +  unsigned long long _jev_generation = 0;
 +  bool _jev_pending = false;
++  com_ptr<ITfRange> _jev_selection;
  };
 diff --git a/include/RimeWithWeasel.h b/include/RimeWithWeasel.h
 index 6fb0a4c..90800fb 100644

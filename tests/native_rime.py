@@ -78,6 +78,8 @@ def run():
     create = fn('RimeCreateSession', C.c_size_t)
     select = fn('RimeSelectSchema', C.c_int, C.c_size_t, C.c_char_p)
     process = fn('RimeProcessKey', C.c_int, C.c_size_t, C.c_int, C.c_int)
+    set_property = fn('RimeSetProperty', None, C.c_size_t, C.c_char_p, C.c_char_p)
+    get_property = fn('RimeGetProperty', C.c_int, C.c_size_t, C.c_char_p, C.c_char_p, C.c_size_t)
     get_context = fn('RimeGetContext', C.c_int, C.c_size_t, C.POINTER(Context))
     free_context = fn('RimeFreeContext', C.c_int, C.POINTER(Context))
     get_commit = fn('RimeGetCommit', C.c_int, C.c_size_t, C.POINTER(Commit))
@@ -136,7 +138,10 @@ def run():
         for _ in range(70):
             if list((bridge_root / 'runtime/outbox').glob('*.res')): break
             time.sleep(.05)
-        key(65477, 12)  # Explicit diagnostic refresh; no system key injection.
+        # Native frontends use a property notifier, never a simulated key.
+        set_property(sid, b'jev_refresh', b'test-1')
+        ack = C.create_string_buffer(100)
+        assert get_property(sid, b'jev_refresh_ack', ack, len(ack)) and ack.value == b'test-1'
         ranked = menu()
         assert ranked['items'][0][0] == original['items'][1][0], (original, ranked)
         assert 'ranked' in ranked['items'][0][1], ranked
@@ -146,6 +151,13 @@ def run():
         assert get_commit(sid, C.byref(commit))
         assert commit.text.decode() == expected_commit
         free_commit(C.byref(commit))
+        time.sleep(1.05)
+        for letter in 'jingli': key(letter)
+        set_property(sid, b'jev_focus_epoch', b'focus-left')
+        assert not list((bridge_root / 'runtime/inbox').glob('*.json')), 'focus must cancel pending input'
+        set_property(sid, b'jev_refresh', b'focus-stale')
+        assert get_property(sid, b'jev_refresh_ack', ack, len(ack)) and ack.value != b'focus-stale'
+        key(65307)
         key(65477)  # Persistent disable.
         assert (bridge_root / 'runtime/preferences').read_text().splitlines()[1] == '0'
         for letter in 'jingli': key(letter)
@@ -178,7 +190,9 @@ def run():
         assert len(fallback['items']) == 7 and 'start service' in fallback['items'][0][1]
         print(json.dumps({'native_rime': 'PASS', 'schema': 'rime_ice_jev',
             'disabled_network_requests': 0, 'enabled_auto_request': True, 'mock_winner_promoted': True,
-            'persistent_toggle': True, 'no_unseen_swap_on_space': True, 'idle_auto_refresh': False, 'three_pages_preserved': True, 'stale_request_cancelled': True,
+            'persistent_toggle': True, 'no_unseen_swap_on_space': True, 'property_refresh': True,
+            'focus_invalidates_pending': True, 'gui_timer_tested': False,
+            'three_pages_preserved': True, 'stale_request_cancelled': True,
             'displayed_winner_committed': True,
             'service_stopped_fallback': True, 'original_schema_preserved': True,
             'f8_toggle_ms': round(elapsed * 1000, 2), 'root': str(root)}, indent=2))

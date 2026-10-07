@@ -224,6 +224,9 @@ function M.processor.init(env)
   env.property = ctx.property_update_notifier:connect(function(c, name)
     if name == 'jev_focus_epoch' then
       clear(state)
+    elseif name == 'jev_manual_selection' then
+      cancel(state)
+      state.paused = c.input
     elseif name == 'jev_refresh' then
       local success = pcall(function()
         settings(state)
