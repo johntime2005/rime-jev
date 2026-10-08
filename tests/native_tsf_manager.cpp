@@ -105,6 +105,26 @@ struct Reader : ITfEditSession {
   }
 };
 
+struct EditObserver : ITfTextEditSink {
+  ULONG refs = 1;
+  TfClientId client;
+  bool called = false, own = false;
+  explicit EditObserver(TfClientId id) : client(id) {}
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    *out = nullptr;
+    if (iid != IID_IUnknown && iid != IID_ITfTextEditSink) return E_NOINTERFACE;
+    *out = static_cast<ITfTextEditSink*>(this); AddRef(); return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return ++refs; }
+  STDMETHODIMP_(ULONG) Release() override { auto n = --refs; if (!n) delete this; return n; }
+  STDMETHODIMP OnEndEdit(ITfContext* context, TfEditCookie, ITfEditRecord*) override {
+    BOOL writing = FALSE;
+    called = true;
+    own = SUCCEEDED(context->InWriteSession(client, &writing)) && writing;
+    return S_OK;
+  }
+};
+
 int main() {
   assert(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)));
   {
@@ -122,6 +142,10 @@ int main() {
     assert(SUCCEEDED(doc->CreateContext(client, 0, static_cast<ITextStoreACP*>(store.Get()), &context, &initial)));
     assert(SUCCEEDED(doc->Push(context.Get())));
     ComPtr<Reader> reader; reader.Attach(new Reader(context.Get()));
+    ComPtr<ITfSource> source; assert(SUCCEEDED(context.As(&source)));
+    ComPtr<EditObserver> observer; observer.Attach(new EditObserver(client));
+    DWORD observer_cookie = TF_INVALID_COOKIE;
+    assert(SUCCEEDED(source->AdviseSink(IID_ITfTextEditSink, observer.Get(), &observer_cookie)));
     auto read = [&]() {
       HRESULT result = E_FAIL;
       assert(SUCCEEDED(context->RequestEditSession(client, reader.Get(), TF_ES_SYNC | TF_ES_READ, &result)));
@@ -147,6 +171,10 @@ int main() {
     assert(read().quality == L"sensitive" && store->reads == 0);
     reader->allow = true;
     assert(read().quality == L"sensitive" && store->reads == 0);
+    HRESULT edit_result = E_FAIL;
+    assert(SUCCEEDED(context->RequestEditSession(client, reader.Get(), TF_ES_SYNC | TF_ES_READWRITE, &edit_result)));
+    assert(SUCCEEDED(edit_result) && observer->called && observer->own);
+    source->UnadviseSink(observer_cookie);
     doc->Pop(TF_POPF_ALL);
     manager->Deactivate();
   }

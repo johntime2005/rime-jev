@@ -142,6 +142,7 @@ def run(context_test=False):
             prop('jev_context', 'pending')
             for letter in 'jingli': key(letter)
             original = menu()
+            assert '[Jev: pending]' in original['items'][0][1], 'context capture must start the native timer'
             assert not list(inbox.glob('*.json')), 'must wait for native context'
             prop('jev_context_query', '1')
             assert getprop('jev_context_consent') == '1', 'allowlist consent not granted'

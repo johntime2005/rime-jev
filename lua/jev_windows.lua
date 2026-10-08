@@ -347,6 +347,9 @@ function M.filter.func(input, env)
   if not ok then state = nil end
   if state and state.enabled then
     local ctx, snap = env.engine.context, state.snapshot
+    -- The native timer is driven by this annotation even before a bridge
+    -- request exists. Without it, capture waits forever for its own result.
+    if snap.document.quality == 'pending' then state.status = 'pending' end
     if state.paused and state.paused ~= snap.input then state.paused = nil end
     if not state.paused and snap.document.quality ~= 'pending' and snap.document.quality ~= 'sensitive'
       and not ctx:get_option('ascii_mode') and first_page(ctx)

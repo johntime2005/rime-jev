@@ -99,7 +99,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Status.ps1
 
 ## 隐私
 
-**官方 Jev 通过服务调用；OpenJev 可由你自己的本地/中转服务提供。** 开启自动请求后，会将当前拼音、当前页候选，以及可选的最多 80 个最近上屏字符发送到
+**官方 Jev 通过服务调用；OpenJev 可由你自己的本地/中转服务提供。** 开启自动请求后，会将当前拼音、当前页候选，以及可选的组合起点前最多 80 个 Unicode 码点发送到
 你配置的服务端点（默认 `https://api.typesafe.ai/v1/systemone`）。关闭时不自动发送；开启时普通打字会触发防抖请求。上文默认关闭。
 
 上文改为实验性 x64 TSF 文档快照，不再使用 Rime 提交历史。必须同时开启上文开关并在
