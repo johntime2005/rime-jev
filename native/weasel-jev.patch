@@ -1,5 +1,5 @@
 diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
-index 3f4e59d..0bad274 100644
+index 3f4e59d..c3a079d 100644
 --- a/RimeWithWeasel/RimeWithWeasel.cpp
 +++ b/RimeWithWeasel/RimeWithWeasel.cpp
 @@ -1,4 +1,5 @@
@@ -16,7 +16,7 @@ index 3f4e59d..0bad274 100644
    bool res = rime_api->highlight_candidate_on_current_page(
        to_session_id(ipc_id), index);
    _Respond(ipc_id, eat);
-@@ -379,12 +381,70 @@ bool RimeWithWeaselHandler::ChangePage(bool backward,
+@@ -379,12 +381,72 @@ bool RimeWithWeaselHandler::ChangePage(bool backward,
                                         EatLine eat) {
    DLOG(INFO) << "change page, ipc_id = " << ipc_id
               << (backward ? "backward" : "foreward");
@@ -43,6 +43,8 @@ index 3f4e59d..0bad274 100644
 +                  std::string(status.schema_id) == "rime_ice_jev";
 +  rime_api->free_status(&status);
 +  if (!eligible) return false;
++  // A failed/missing Lua notifier must not reuse a previous grant.
++  rime_api->set_property(session, "jev_context_consent", "0");
 +  rime_api->set_property(session, "jev_context_query", std::to_string(++m_jev_serial).c_str());
 +  char consent[4] = {};
 +  return rime_api->get_property(session, "jev_context_consent", consent, sizeof(consent)) && std::string(consent) == "1";
@@ -87,7 +89,7 @@ index 3f4e59d..0bad274 100644
  void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
    DLOG(INFO) << "Focus in: ipc_id = " << ipc_id
               << ", client_caps = " << client_caps;
-@@ -398,6 +458,9 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
+@@ -398,6 +460,9 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
    DLOG(INFO) << "Focus out: ipc_id = " << ipc_id;
    if (m_ui)
      m_ui->Hide();
