@@ -1,9 +1,17 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace jev {
+// Preserve the wire ABI with ordinary Weasel clients: header is three DWORDs;
+// an optional UTF-16 body follows immediately, not after a response header.
+inline bool PacketBody(const std::vector<char>& packet, std::vector<char>& body) {
+  if (packet.size() < 12 || packet.size() > 65536) return false;
+  body.assign(packet.begin() + 12, packet.end());
+  return true;
+}
 // Protocol counts Unicode scalar values, not glyphs or UTF-16 code units.
 // No normalization, whitespace trimming, or hard/soft-wrap reconstruction.
 inline bool Tail(const std::wstring& input, bool at_start, std::wstring& output) {

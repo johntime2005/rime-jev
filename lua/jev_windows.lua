@@ -152,9 +152,12 @@ local function prepare(buffer, env)
   end
   local doc = document(ctx:get_property('jev_context'))
     or { quality = 'unavailable', stamp = '', text = '' }
+  if not state.use_context or state.context_suppressed or not state.context_apps[ctx:get_property('client_app'):lower()] then
+    doc.text = ''
+    if doc.quality == 'exact' then doc.quality = 'unavailable' end
+  end
   snap.document = doc
-  snap.context = state.use_context and not state.context_suppressed
-    and state.context_apps[ctx:get_property('client_app'):lower()] and doc.quality == 'exact' and doc.text or ''
+  snap.context = doc.quality == 'exact' and doc.text or ''
   snap.signature = signature(snap, snap.context) .. '|' .. doc.quality .. '|' .. doc.stamp
   if state.snapshot and state.snapshot.signature ~= snap.signature then cancel(state) end
   if state.applied and os.time() > state.applied.expires then cancel(state) end

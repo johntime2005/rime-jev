@@ -3,6 +3,15 @@
 #include <iostream>
 
 int main() {
+  std::vector<char> first(12, 'a'), second(12, 'b'), body;
+  first.insert(first.end(), {'J', 0, '1', 0});
+  second.insert(second.end(), {'J', 0, '2', 0});
+  assert(jev::PacketBody(first, body) && body == std::vector<char>({'J', 0, '1', 0}));
+  auto saved = body;
+  assert(jev::PacketBody(second, body) && body != saved);
+  assert(jev::PacketBody(std::vector<char>(12), body) && body.empty());
+  assert(!jev::PacketBody(std::vector<char>(11), body));
+  assert(!jev::PacketBody(std::vector<char>(65537), body));
   std::wstring out;
   assert(jev::Tail(L"word  \r\nnext\t", true, out) && out == L"word  \r\nnext\t");
   assert(jev::Tail(L"", true, out) && out.empty());

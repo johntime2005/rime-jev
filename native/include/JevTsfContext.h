@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "JevContext.h"
 #include <windows.h>
@@ -17,7 +18,7 @@ struct ScopedVariant {
 // Called only in an authorized edit session, for an explicitly opted-in app.
 // The application is the text authority. Misbehaving text stores cannot be
 // made trustworthy here; unknown/transitory stores deliberately abstain.
-inline Snapshot Read(ITfContext* context, ITfRange* anchor, TfEditCookie ec) {
+inline Snapshot Read(ITfContext* context, ITfRange* anchor, TfEditCookie ec, bool allow_text = true) {
   Snapshot result;
   TF_STATUS status = {};
   if (!context || !anchor || FAILED(context->GetStatus(&status)) ||
@@ -48,6 +49,7 @@ inline Snapshot Read(ITfContext* context, ITfRange* anchor, TfEditCookie ec) {
       if (sensitive) { result.quality = L"sensitive"; return result; }
     }
   }
+  if (!allow_text) return result;
   Microsoft::WRL::ComPtr<ITfRange> range, start;
   if (FAILED(anchor->Clone(&range)) || FAILED(range->Collapse(ec, TF_ANCHOR_START))) return result;
   LONG shifted = 0, comparison = 1;

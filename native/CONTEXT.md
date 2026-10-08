@@ -23,6 +23,8 @@ key logging, application injection, or game-memory inspection is used.
 - Known password/private/PIN scopes are excluded. Application allowlisting
   and TSF disabled/empty-context checks are additional gates, NOT universal DLP.
   A malicious or incorrect text store cannot be verified by these APIs.
+  Scope metadata is checked even when text consent is off; this does not call
+  GetText. An app whose scope metadata lookup fails does not supply context.
 - Missing context uses ordinary context-free ranking. Sensitive contexts do
   not submit. Commit history is no longer treated as surrounding text.
 
@@ -87,7 +89,10 @@ python tests/native_rime.py --context
 The C++ tests call the production reader against controlled COM interfaces.
 They verify lock failure, region boundaries, composition/selection anchors,
 real whitespace, Unicode bounds and same-caret text changes. They do NOT
-simulate Windows' whole TSF manager or certify a real application.
+certify a real application. A separate `native_tsf_manager` test runs the real
+Windows TSF manager against an app-owned synthetic `ITextStoreACP`, checks
+actual edit locks/ranges, text/selection notifications and input scopes, and
+uses `TF_TMAE_NOACTIVATETIP` to avoid activating the installed input method.
 
 The librime tests use isolated data and a mock provider. They exercise real
 Lua consent, snapshot framing, request/response binding, stale rejection,
@@ -101,6 +106,12 @@ Measure capture and key-path P50/P95; a bounded range is not a latency proof.
 Do not claim terminal/game compatibility, zero missed edits, or universal
 password detection from unit tests. Windows CI builds the complete DLL/server;
 production GUI/latency acceptance remains a separate gate.
+
+The first compiled DLL also passed unregistered COM load/create/release in a
+disposable process, but retained a service reference (`DllCanUnloadNow=S_FALSE`).
+This pre-existing lifetime issue is not a successful unload test. Native trial
+rollback still requires terminating/restarting the host application; this PR
+does not certify hot DLL unloading.
 
 ## Rollback
 

@@ -16,7 +16,7 @@ on a new thread. Existing upstream key simulation unrelated to Jev is unmodified
 
 Checks include active server session, TSF context identity, foreground process,
 input-event generation, first-page selection, Lua input/caret/snapshot/expiry,
-and explicit enable preference. FocusOut clears pending text and history.
+and explicit enable preference. FocusOut cancels pending requests.
 Password/disabled TSF contexts are excluded; this is not universal DLP.
 
 The patch now also includes opt-in surrounding text through TSF. See
