@@ -12,3 +12,6 @@ __patch:
   translator/prism: rime_ice
   engine/processors/@before 0: lua_processor@*jev_windows*processor
   engine/filters/@next: lua_filter@*jev_windows*filter
+  # Explicit per-application opt-in, in addition to the runtime context switch.
+  # Add executable names only after validating the application's TSF text store.
+  jev_windows/context_apps: []

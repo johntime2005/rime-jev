@@ -19,6 +19,12 @@ input-event generation, first-page selection, Lua input/caret/snapshot/expiry,
 and explicit enable preference. FocusOut clears pending text and history.
 Password/disabled TSF contexts are excluded; this is not universal DLP.
 
+The patch now also includes opt-in surrounding text through TSF. See
+`CONTEXT.md` for the exact contract, empty-by-default application allowlist,
+protocol, test boundaries, and rollback. `native/include` contains the GPL
+reader/protocol headers copied into the pinned checkout by Prepare-Weasel.
+Old commit history is no longer an application-document fallback.
+
 Build with `scripts/Build-Weasel.ps1` in a VS 2022 developer environment with
 ATL, MSBuild, Python and 7-Zip, or dispatch the GitHub Actions workflow.
 Only x64 TSF and server are built initially. Stock x86/IMM clients do not gain

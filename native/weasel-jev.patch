@@ -1,14 +1,14 @@
 diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
-index 3f4e59d..85311a8 100644
+index 3f4e59d..0bad274 100644
 --- a/RimeWithWeasel/RimeWithWeasel.cpp
 +++ b/RimeWithWeasel/RimeWithWeasel.cpp
-@@ -1,4 +1,4 @@
--﻿#include "stdafx.h"
-+#include "stdafx.h"
+@@ -1,4 +1,5 @@
+ ﻿#include "stdafx.h"
++#include <JevContext.h>
  #include <logging.h>
  #include <RimeWithWeasel.h>
  #include <StringAlgorithm.hpp>
-@@ -367,6 +367,7 @@ bool RimeWithWeaselHandler::HighlightCandidateOnCurrentPage(
+@@ -367,6 +368,7 @@ bool RimeWithWeaselHandler::HighlightCandidateOnCurrentPage(
      EatLine eat) {
    DLOG(INFO) << "highlight candidate on current page, ipc_id = " << ipc_id
               << ", index = " << index;
@@ -16,7 +16,7 @@ index 3f4e59d..85311a8 100644
    bool res = rime_api->highlight_candidate_on_current_page(
        to_session_id(ipc_id), index);
    _Respond(ipc_id, eat);
-@@ -379,12 +380,40 @@ bool RimeWithWeaselHandler::ChangePage(bool backward,
+@@ -379,12 +381,70 @@ bool RimeWithWeaselHandler::ChangePage(bool backward,
                                         EatLine eat) {
    DLOG(INFO) << "change page, ipc_id = " << ipc_id
               << (backward ? "backward" : "foreward");
@@ -27,6 +27,36 @@ index 3f4e59d..85311a8 100644
    return res;
  }
  
++void RimeWithWeaselHandler::JevContextReset(DWORD ipc_id) {
++  auto it = m_session_status_map.find(ipc_id);
++  if (m_disabled || it == m_session_status_map.end()) return;
++  rime_api->set_property(it->second.session_id, "jev_context", "pending");
++}
++
++bool RimeWithWeaselHandler::JevContextQuery(DWORD ipc_id) {
++  auto it = m_session_status_map.find(ipc_id);
++  if (m_disabled || !ipc_id || m_active_session != ipc_id || it == m_session_status_map.end()) return false;
++  auto session = it->second.session_id;
++  RIME_STRUCT(RimeStatus, status);
++  if (!rime_api->get_status(session, &status)) return false;
++  bool eligible = status.is_composing && !status.is_ascii_mode && status.schema_id &&
++                  std::string(status.schema_id) == "rime_ice_jev";
++  rime_api->free_status(&status);
++  if (!eligible) return false;
++  rime_api->set_property(session, "jev_context_query", std::to_string(++m_jev_serial).c_str());
++  char consent[4] = {};
++  return rime_api->get_property(session, "jev_context_consent", consent, sizeof(consent)) && std::string(consent) == "1";
++}
++
++bool RimeWithWeaselHandler::JevContextSet(DWORD ipc_id, const std::wstring& wire) {
++  auto it = m_session_status_map.find(ipc_id);
++  jev::Snapshot snapshot;
++  if (m_disabled || !ipc_id || m_active_session != ipc_id || it == m_session_status_map.end() || !jev::Parse(wire, snapshot)) return false;
++  if (snapshot.quality == L"exact" && !JevContextQuery(ipc_id)) return false;
++  rime_api->set_property(it->second.session_id, "jev_context", wtou8(wire).c_str());
++  return true;
++}
++
 +bool RimeWithWeaselHandler::JevRefresh(DWORD ipc_id, EatLine eat) {
 +  auto it = m_session_status_map.find(ipc_id);
 +  if (m_disabled || !ipc_id || m_active_session != ipc_id || it == m_session_status_map.end())
@@ -57,7 +87,7 @@ index 3f4e59d..85311a8 100644
  void RimeWithWeaselHandler::FocusIn(DWORD client_caps, WeaselSessionId ipc_id) {
    DLOG(INFO) << "Focus in: ipc_id = " << ipc_id
               << ", client_caps = " << client_caps;
-@@ -398,6 +427,9 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
+@@ -398,6 +458,9 @@ void RimeWithWeaselHandler::FocusOut(DWORD param, WeaselSessionId ipc_id) {
    DLOG(INFO) << "Focus out: ipc_id = " << ipc_id;
    if (m_ui)
      m_ui->Hide();
@@ -68,19 +98,31 @@ index 3f4e59d..85311a8 100644
  }
  
 diff --git a/WeaselIPC/WeaselClientImpl.cpp b/WeaselIPC/WeaselClientImpl.cpp
-index 26122ad..5113ffa 100644
+index 26122ad..c23a6a7 100644
 --- a/WeaselIPC/WeaselClientImpl.cpp
 +++ b/WeaselIPC/WeaselClientImpl.cpp
-@@ -1,4 +1,4 @@
--﻿#include "stdafx.h"
-+#include "stdafx.h"
- #include "WeaselClientImpl.h"
- #include <StringAlgorithm.hpp>
- 
-@@ -96,6 +96,10 @@ bool ClientImpl::HighlightCandidateOnCurrentPage(size_t index) {
+@@ -96,6 +96,28 @@ bool ClientImpl::HighlightCandidateOnCurrentPage(size_t index) {
    return ret != 0;
  }
  
++bool ClientImpl::JevContextSupported() {
++  return _Active() && _SendMessage(WEASEL_IPC_JEV_CONTEXT_QUERY, 1, session_id) == 0x4a435831;
++}
++
++bool ClientImpl::JevContextQuery() {
++  return _Active() && _SendMessage(WEASEL_IPC_JEV_CONTEXT_QUERY, 0, session_id) == 1;
++}
++
++bool ClientImpl::JevContextSet(const std::wstring& wire) {
++  if (!_Active() || wire.size() > 740) return false;
++  channel << wire.c_str() << L"\n";
++  return _SendMessage(WEASEL_IPC_JEV_CONTEXT_SET, 0, session_id) == 1;
++}
++
++bool ClientImpl::JevKeyEvent(KeyEvent const& key) {
++  return _Active() && _SendMessage(WEASEL_IPC_JEV_KEY_EVENT, key, session_id) != 0;
++}
++
 +bool ClientImpl::JevRefresh() {
 +  return _Active() && _SendMessage(WEASEL_IPC_JEV_REFRESH, 0, session_id) != 0;
 +}
@@ -88,41 +130,110 @@ index 26122ad..5113ffa 100644
  bool ClientImpl::ChangePage(bool backward) {
    if (!_Active())
      return false;
-@@ -240,6 +244,8 @@ bool Client::HighlightCandidateOnCurrentPage(size_t index) {
+@@ -240,6 +262,12 @@ bool Client::HighlightCandidateOnCurrentPage(size_t index) {
    return m_pImpl->HighlightCandidateOnCurrentPage(index);
  }
  
 +bool Client::JevRefresh() { return m_pImpl->JevRefresh(); }
++bool Client::JevContextSupported() { return m_pImpl->JevContextSupported(); }
++bool Client::JevContextQuery() { return m_pImpl->JevContextQuery(); }
++bool Client::JevContextSet(const std::wstring& wire) { return m_pImpl->JevContextSet(wire); }
++bool Client::JevKeyEvent(KeyEvent const& key) { return m_pImpl->JevKeyEvent(key); }
 +
  bool Client::ChangePage(bool backward) {
    return m_pImpl->ChangePage(backward);
  }
 diff --git a/WeaselIPC/WeaselClientImpl.h b/WeaselIPC/WeaselClientImpl.h
-index 7602792..12e2bb1 100644
+index 7602792..48af879 100644
 --- a/WeaselIPC/WeaselClientImpl.h
 +++ b/WeaselIPC/WeaselClientImpl.h
-@@ -23,6 +23,7 @@ class ClientImpl {
+@@ -23,6 +23,11 @@ class ClientImpl {
    bool SelectCandidateOnCurrentPage(size_t index);
    bool HighlightCandidateOnCurrentPage(size_t index);
    bool ChangePage(bool backward);
 +  bool JevRefresh();
++  bool JevContextQuery();
++  bool JevContextSupported();
++  bool JevContextSet(const std::wstring& wire);
++  bool JevKeyEvent(KeyEvent const& key);
    void UpdateInputPosition(RECT const& rc);
    void FocusIn();
    void FocusOut();
 diff --git a/WeaselIPCServer/WeaselServerImpl.cpp b/WeaselIPCServer/WeaselServerImpl.cpp
-index 11225c4..a8f1780 100644
+index 11225c4..f276637 100644
 --- a/WeaselIPCServer/WeaselServerImpl.cpp
 +++ b/WeaselIPCServer/WeaselServerImpl.cpp
-@@ -1,4 +1,4 @@
--﻿#include "stdafx.h"
-+#include "stdafx.h"
+@@ -1,6 +1,7 @@
+ ﻿#include "stdafx.h"
  #include "WeaselServerImpl.h"
  #include <mutex>
++#include <vector>
  #include <Windows.h>
-@@ -225,6 +225,14 @@ DWORD ServerImpl::OnKeyEvent(WEASEL_IPC_COMMAND uMsg,
+ #include <resource.h>
+ #include <WeaselUtility.h>
+@@ -10,12 +11,20 @@ class PipeServer : public PipeChannel<DWORD, PipeMessage> {
+  public:
+   using ServerRunner = std::function<void()>;
+   using Respond = std::function<void(Msg)>;
+-  using ServerHandler = std::function<void(PipeMessage, Respond)>;
++  using ServerHandler = std::function<void(PipeMessage, const std::vector<char>&, Respond)>;
+ 
+   PipeServer(std::wstring&& pn_cmd, SECURITY_ATTRIBUTES* s);
+ 
+  public:
+   void Listen(ServerHandler const& handler);
++  void LoadRequest(const std::vector<char>& packet) {
++    ClearBufferStream();
++    memset(buffer.get(), 0, buff_size);
++    body_size = packet.size() - sizeof(PipeMessage);
++    memcpy(buffer.get(), packet.data() + sizeof(PipeMessage), body_size);
++  }
++  const WCHAR* RequestBody() const { return reinterpret_cast<const WCHAR*>(buffer.get()); }
++  size_t body_size = 0;
+   /* Get a server runner */
+   ServerRunner GetServerRunner(ServerHandler const& handler);
+ 
+@@ -171,8 +180,9 @@ int ServerImpl::Run() {
+   // auto handler = boost::bind(&ServerImpl::HandlePipeMessage, this);
+   // auto listener = boost::bind(&PipeServer::Listen, channel.get(), handler);
+   //
+-  auto listener = [this](PipeMessage msg, PipeServer::Respond resp) -> void {
++  auto listener = [this](PipeMessage msg, const std::vector<char>& packet, PipeServer::Respond resp) -> void {
+     std::lock_guard guard(g_api_mutex);
++    channel->LoadRequest(packet);
+     HandlePipeMessage(msg, resp);
+   };
+   pipeThread = std::make_unique<boost::thread>(
+@@ -225,6 +235,40 @@ DWORD ServerImpl::OnKeyEvent(WEASEL_IPC_COMMAND uMsg,
    return m_pRequestHandler->ProcessKeyEvent(KeyEvent(wParam), lParam, eat);
  }
  
++DWORD ServerImpl::OnJevContextQuery(WEASEL_IPC_COMMAND, DWORD capability, DWORD session) {
++  if (capability == 1) return 0x4a435831;
++  return m_pRequestHandler && m_pRequestHandler->JevContextQuery(session);
++}
++
++DWORD ServerImpl::OnJevContextSet(WEASEL_IPC_COMMAND, DWORD, DWORD session) {
++  if (!m_pRequestHandler) return 0;
++  if (channel->body_size < 2 || channel->body_size % sizeof(WCHAR)) return 0;
++  const auto data = channel->RequestBody();
++  size_t length = 0;
++  while (length < (std::min)(size_t(742), channel->body_size / sizeof(WCHAR)) && data[length] && data[length] != L'\n') ++length;
++  if (length > 740 || length >= channel->body_size / sizeof(WCHAR) || data[length] != L'\n') return 0;
++  return m_pRequestHandler->JevContextSet(session, std::wstring(data, length));
++}
++
++DWORD ServerImpl::OnJevKeyEvent(WEASEL_IPC_COMMAND cmd, DWORD key, DWORD session) {
++  if (!m_pRequestHandler) return 0;
++  const KeyEvent event(key);
++  // Commit the already displayed choice. Never replace it on Space/numbers,
++  // and do not retire a freshly captured snapshot on key release.
++  if (!(event.mask & ibus::RELEASE_MASK) && event.keycode != ibus::space &&
++      event.keycode != ibus::Return && !(event.keycode >= '0' && event.keycode <= '9'))
++    m_pRequestHandler->JevContextReset(session);
++  return OnKeyEvent(cmd, key, session);
++}
++
 +DWORD ServerImpl::OnJevRefresh(WEASEL_IPC_COMMAND, DWORD, DWORD session) {
 +  if (!m_pRequestHandler) return 0;
 +  return m_pRequestHandler->JevRefresh(session, [this](std::wstring& msg) {
@@ -134,22 +245,54 @@ index 11225c4..a8f1780 100644
  DWORD ServerImpl::OnShutdownServer(WEASEL_IPC_COMMAND uMsg,
                                     DWORD wParam,
                                     DWORD lParam) {
-@@ -379,6 +387,7 @@ void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
+@@ -379,6 +423,10 @@ void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
    DWORD result;
  
    MAP_PIPE_MSG_HANDLE(pipe_msg.Msg, pipe_msg.wParam, pipe_msg.lParam)
 +  PIPE_MSG_HANDLE(WEASEL_IPC_JEV_REFRESH, OnJevRefresh)
++  PIPE_MSG_HANDLE(WEASEL_IPC_JEV_CONTEXT_QUERY, OnJevContextQuery)
++  PIPE_MSG_HANDLE(WEASEL_IPC_JEV_CONTEXT_SET, OnJevContextSet)
++  PIPE_MSG_HANDLE(WEASEL_IPC_JEV_KEY_EVENT, OnJevKeyEvent)
    PIPE_MSG_HANDLE(WEASEL_IPC_ECHO, OnEcho)
    PIPE_MSG_HANDLE(WEASEL_IPC_START_SESSION, OnStartSession)
    PIPE_MSG_HANDLE(WEASEL_IPC_END_SESSION, OnEndSession)
+@@ -428,13 +476,21 @@ PipeServer::ServerRunner PipeServer::GetServerRunner(
+ void PipeServer::_ProcessPipeThread(HANDLE pipe, ServerHandler const& handler) {
+   try {
+     for (;;) {
+-      Res msg;
+-      _Receive(pipe, &msg, sizeof(msg));
+-      handler(msg, [this, pipe](Msg resp) { _Send(pipe, resp); });
++      // Each client reads into its own packet. Shared buffers may only be
++      // populated/consumed under g_api_mutex; otherwise concurrent clients can
++      // pair one session's header with another session's surrounding text.
++      std::vector<char> packet(buff_size);
++      DWORD received = 0;
++      if (!ReadFile(pipe, packet.data(), static_cast<DWORD>(packet.size()), &received, nullptr) ||
++          received < sizeof(PipeMessage)) break;
++      packet.resize(received);
++      PipeMessage msg;
++      memcpy(&msg, packet.data(), sizeof(msg));
++      handler(msg, packet, [this, pipe](Msg resp) { _Send(pipe, resp); });
+     }
+   } catch (...) {
+-    _FinalizePipe(pipe);
+   }
++  _FinalizePipe(pipe);
+ }
+ 
+ // weasel::Server
 diff --git a/WeaselIPCServer/WeaselServerImpl.h b/WeaselIPCServer/WeaselServerImpl.h
-index a4d123d..6b455e6 100644
+index a4d123d..37154ea 100644
 --- a/WeaselIPCServer/WeaselServerImpl.h
 +++ b/WeaselIPCServer/WeaselServerImpl.h
-@@ -70,6 +70,7 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
+@@ -70,6 +70,10 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
                                            DWORD wParam,
                                            DWORD lParam);
    DWORD OnChangePage(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
++  DWORD OnJevContextQuery(WEASEL_IPC_COMMAND, DWORD, DWORD);
++  DWORD OnJevContextSet(WEASEL_IPC_COMMAND, DWORD, DWORD);
++  DWORD OnJevKeyEvent(WEASEL_IPC_COMMAND, DWORD, DWORD);
 +  DWORD OnJevRefresh(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
  
   public:
@@ -241,19 +384,47 @@ index 648732c..77a50d1 100644
  
    std::unique_ptr<weasel::UI> _ui;
    DWORD _cRef;
+diff --git a/WeaselTSF/Compartment.cpp b/WeaselTSF/Compartment.cpp
+index a45e0d1..cbd57e5 100644
+--- a/WeaselTSF/Compartment.cpp
++++ b/WeaselTSF/Compartment.cpp
+@@ -115,7 +115,7 @@ BOOL WeaselTSF::_IsKeyboardDisabled() {
+       VARIANT var;
+       if (pCompartmentDisabled->GetValue(&var) == S_OK) {
+         if (var.vt == VT_I4)  // Even VT_EMPTY, GetValue() can succeed
+-          fDisabled = (BOOL)var.lVal;
++          fDisabled = fDisabled || (BOOL)var.lVal;
+       }
+       pCompartmentDisabled->Release();
+     }
+@@ -126,7 +126,7 @@ BOOL WeaselTSF::_IsKeyboardDisabled() {
+       VARIANT var;
+       if (pCompartmentEmptyContext->GetValue(&var) == S_OK) {
+         if (var.vt == VT_I4)  // Even VT_EMPTY, GetValue() can succeed
+-          fDisabled = (BOOL)var.lVal;
++          fDisabled = fDisabled || (BOOL)var.lVal;
+       }
+       pCompartmentEmptyContext->Release();
+     }
 diff --git a/WeaselTSF/EditSession.cpp b/WeaselTSF/EditSession.cpp
-index 8f4d503..ace9335 100644
+index 8f4d503..34a89ea 100644
 --- a/WeaselTSF/EditSession.cpp
 +++ b/WeaselTSF/EditSession.cpp
-@@ -2,6 +2,7 @@
+@@ -2,6 +2,13 @@
  #include "WeaselTSF.h"
  #include "CandidateList.h"
  #include "ResponseParser.h"
 +#include "EditSession.h"
++#include <JevTsfContext.h>
++
++void WeaselTSF::JevInvalidate() {
++  ++_jev_generation;
++  _jev_context_wire.clear();
++}
  
  STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
    // get commit string from server
-@@ -41,7 +42,74 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
+@@ -41,7 +48,95 @@ STDAPI WeaselTSF::DoEditSession(TfEditCookie ec) {
      _UpdateCompositionWindow(_pEditSessionContext);
    }
  
@@ -310,8 +481,7 @@ index 8f4d503..ace9335 100644
 +  DWORD pid = 0;
 +  GetWindowThreadProcessId(GetForegroundWindow(), &pid);
 +  if (pid != GetCurrentProcessId()) return S_OK;
-+  // Moving the application caret invalidates a queued refresh, even if Rime
-+  // still has the old pinyin. Compare ranges; never read surrounding text.
++  // A moved caret may no longer belong to this composition.
 +  TF_SELECTION selection = {};
 +  ULONG fetched = 0;
 +  if (!_jev_selection || FAILED(context->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched != 1)
@@ -325,63 +495,123 @@ index 8f4d503..ace9335 100644
 +    m_client.FocusOut();
 +    return S_OK;
 +  }
++  if (_jev_native_context) {
++    jev::Snapshot snapshot;
++    if (m_client.JevContextQuery()) {
++      com_ptr<ITfRange> anchor;
++      if (_pComposition && SUCCEEDED(_pComposition->GetRange(&anchor)))
++        snapshot = jev::Read(context, anchor, ec);
++    }
++    jev::Snapshot previous;
++    const auto observed_generation = _jev_generation;
++    if (jev::Parse(_jev_context_wire, previous) && previous.quality == snapshot.quality && previous.text == snapshot.text) {
++      snapshot.stamp = previous.stamp;
++    } else {
++      snapshot.stamp = std::to_wstring(GetCurrentProcessId()) + L"-" +
++          std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(++_jev_context_serial);
++    }
++    // Capture/recheck and candidate application share this TSF document lock.
++    // A new stamp cancels Lua's old request before any result can be consumed.
++    auto wire = snapshot.Wire();
++    if (!m_client.JevContextSet(wire)) return S_OK;
++    if (observed_generation != _jev_generation) return S_OK;
++    _jev_context_wire = wire;
++  }
 +  if (m_client.JevRefresh()) return DoEditSession(ec);
 +  return S_OK;
 +}
 diff --git a/WeaselTSF/KeyEventSink.cpp b/WeaselTSF/KeyEventSink.cpp
-index c885ddd..95e4af4 100644
+index c885ddd..7c42975 100644
 --- a/WeaselTSF/KeyEventSink.cpp
 +++ b/WeaselTSF/KeyEventSink.cpp
-@@ -9,6 +9,7 @@ static BOOL prevfEaten = FALSE;
+@@ -9,6 +9,8 @@ static BOOL prevfEaten = FALSE;
  static int keyCountToSimulate = 0;
  
  void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
 +  ++_jev_generation;
++  _jev_context_wire.clear();
    // when _IsKeyboardDisabled don't eat the key,
    // when keyboard closable and keyboard closed, don't eat the key
    if ((_isToOpenClose && !_IsKeyboardOpen()) || _IsKeyboardDisabled()) {
-@@ -63,6 +64,7 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
+@@ -21,6 +23,7 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
+     *pfEaten = FALSE;
+     return;
+   }
++  _jev_native_context = m_client.JevContextSupported();
+   weasel::KeyEvent ke;
+   GetKeyboardState(_lpbKeyState);
+   if (!ConvertKeyEvent(static_cast<UINT>(wParam), lParam, _lpbKeyState, ke)) {
+@@ -35,7 +38,7 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
+         ke.keycode = ibus::Up;
+     }
+     if (!keyCountToSimulate)
+-      *pfEaten = (BOOL)m_client.ProcessKeyEvent(ke);
++      *pfEaten = (BOOL)(_jev_native_context ? m_client.JevKeyEvent(ke) : m_client.ProcessKeyEvent(ke));
+ 
+     if (ke.keycode == ibus::Caps_Lock) {
+       if (prevKeyEvent.keycode == ibus::Caps_Lock && prevfEaten == TRUE &&
+@@ -63,6 +66,7 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
  }
  
  STDAPI WeaselTSF::OnSetFocus(BOOL fForeground) {
-+  ++_jev_generation;
++  JevInvalidate();
    if (fForeground)
      m_client.FocusIn();
    else {
+diff --git a/WeaselTSF/TextEditSink.cpp b/WeaselTSF/TextEditSink.cpp
+index a6bc1f0..f43a8e0 100644
+--- a/WeaselTSF/TextEditSink.cpp
++++ b/WeaselTSF/TextEditSink.cpp
+@@ -20,6 +20,8 @@ static BOOL IsRangeCovered(TfEditCookie ec,
+ STDAPI WeaselTSF::OnEndEdit(ITfContext* pContext,
+                             TfEditCookie ecReadOnly,
+                             ITfEditRecord* pEditRecord) {
++  BOOL own = FALSE;
++  if (FAILED(pContext->InWriteSession(_tfClientId, &own)) || !own) JevInvalidate();
+   BOOL fSelectionChanged;
+   IEnumTfRanges* pEnumTextChanges;
+   ITfRange* pRange;
 diff --git a/WeaselTSF/ThreadMgrEventSink.cpp b/WeaselTSF/ThreadMgrEventSink.cpp
-index a46ca37..5dcf7ce 100644
+index a46ca37..742802f 100644
 --- a/WeaselTSF/ThreadMgrEventSink.cpp
 +++ b/WeaselTSF/ThreadMgrEventSink.cpp
 @@ -11,6 +11,8 @@ STDAPI WeaselTSF::OnUninitDocumentMgr(ITfDocumentMgr* pDocMgr) {
  
  STDAPI WeaselTSF::OnSetFocus(ITfDocumentMgr* pDocMgrFocus,
                               ITfDocumentMgr* pDocMgrPrevFocus) {
-+  ++_jev_generation;
++  JevInvalidate();
 +  if (pDocMgrFocus != pDocMgrPrevFocus) m_client.FocusOut();
    _InitTextEditSink(pDocMgrFocus);
  
    com_ptr<ITfDocumentMgr> pCandidateListDocumentMgr;
+@@ -28,10 +30,12 @@ STDAPI WeaselTSF::OnSetFocus(ITfDocumentMgr* pDocMgrFocus,
+ }
+ 
+ STDAPI WeaselTSF::OnPushContext(ITfContext* pContext) {
++  JevInvalidate();
+   return S_OK;
+ }
+ 
+ STDAPI WeaselTSF::OnPopContext(ITfContext* pContext) {
++  JevInvalidate();
+   return S_OK;
+ }
+ 
 diff --git a/WeaselTSF/WeaselTSF.cpp b/WeaselTSF/WeaselTSF.cpp
-index 590d3b8..374ed4d 100644
+index 590d3b8..4ff4c68 100644
 --- a/WeaselTSF/WeaselTSF.cpp
 +++ b/WeaselTSF/WeaselTSF.cpp
-@@ -1,4 +1,4 @@
--﻿#include "stdafx.h"
-+#include "stdafx.h"
- 
- #include <WeaselIPCData.h>
- #include <thread>
 @@ -183,6 +183,8 @@ STDMETHODIMP WeaselTSF::OnSetThreadFocus() {
    return S_OK;
  }
  STDMETHODIMP WeaselTSF::OnKillThreadFocus() {
-+  ++_jev_generation;
++  JevInvalidate();
 +  m_client.FocusOut();
    _AbortComposition();
    return S_OK;
  }
 diff --git a/WeaselTSF/WeaselTSF.h b/WeaselTSF/WeaselTSF.h
-index 696d3cc..d40875a 100644
+index 696d3cc..c1d8552 100644
 --- a/WeaselTSF/WeaselTSF.h
 +++ b/WeaselTSF/WeaselTSF.h
 @@ -147,6 +147,8 @@ class WeaselTSF : public ITfTextInputProcessorEx,
@@ -393,63 +623,74 @@ index 696d3cc..d40875a 100644
    void HandleUICallback(size_t* const sel,
                          size_t* const hov,
                          bool* const next,
-@@ -233,4 +235,7 @@ class WeaselTSF : public ITfTextInputProcessorEx,
+@@ -233,4 +235,11 @@ class WeaselTSF : public ITfTextInputProcessorEx,
    BOOL _async_edit = false;
    BOOL _committed = false;
    BOOL _isToOpenClose = false;
 +  unsigned long long _jev_generation = 0;
 +  bool _jev_pending = false;
++  bool _jev_native_context = false;
++  std::wstring _jev_context_wire;
++  unsigned long long _jev_context_serial = 0;
++  void JevInvalidate();
 +  com_ptr<ITfRange> _jev_selection;
  };
 diff --git a/include/RimeWithWeasel.h b/include/RimeWithWeasel.h
-index 6fb0a4c..90800fb 100644
+index 6fb0a4c..7037ad3 100644
 --- a/include/RimeWithWeasel.h
 +++ b/include/RimeWithWeasel.h
-@@ -61,6 +61,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+@@ -61,6 +61,10 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
                           const std::string& opt,
                           bool val);
    virtual void UpdateColorTheme(BOOL darkMode);
 +  bool JevRefresh(DWORD ipc_id, EatLine eat) override;
++  bool JevContextQuery(DWORD ipc_id) override;
++  bool JevContextSet(DWORD ipc_id, const std::wstring& wire) override;
++  void JevContextReset(DWORD ipc_id) override;
  
    void OnUpdateUI(std::function<void()> const& cb);
  
-@@ -119,4 +120,5 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+@@ -119,4 +123,5 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
    bool m_global_ascii_mode;
    int m_show_notifications_time;
    DWORD m_pid;
 +  unsigned long long m_jev_serial = 0;
  };
 diff --git a/include/WeaselIPC.h b/include/WeaselIPC.h
-index 3065cb5..3e4cce9 100644
+index 3065cb5..f80cf3b 100644
 --- a/include/WeaselIPC.h
 +++ b/include/WeaselIPC.h
-@@ -1,4 +1,4 @@
--﻿#pragma once
-+#pragma once
- #include <WeaselIPCData.h>
- #include <WeaselUtility.h>
- #include <windows.h>
-@@ -32,6 +32,7 @@ enum WEASEL_IPC_COMMAND {
+@@ -32,6 +32,10 @@ enum WEASEL_IPC_COMMAND {
    WEASEL_IPC_SELECT_CANDIDATE_ON_CURRENT_PAGE,
    WEASEL_IPC_HIGHLIGHT_CANDIDATE_ON_CURRENT_PAGE,
    WEASEL_IPC_CHANGE_PAGE,
 +  WEASEL_IPC_JEV_REFRESH = WM_APP + 0x4a0,
++  WEASEL_IPC_JEV_CONTEXT_QUERY,
++  WEASEL_IPC_JEV_CONTEXT_SET,
++  WEASEL_IPC_JEV_KEY_EVENT,
    WEASEL_IPC_LAST_COMMAND
  };
  
-@@ -81,6 +82,7 @@ struct RequestHandler {
+@@ -81,6 +85,10 @@ struct RequestHandler {
    virtual void EndMaintenance() {}
    virtual void SetOption(DWORD session_id, const std::string& opt, bool val) {}
    virtual void UpdateColorTheme(BOOL darkMode) {}
 +  virtual bool JevRefresh(DWORD session_id, EatLine eat) { return false; }
++  virtual bool JevContextQuery(DWORD session) { return false; }
++  virtual bool JevContextSet(DWORD session, const std::wstring& wire) { return false; }
++  virtual void JevContextReset(DWORD session) {}
  };
  
  // 處理server端回應之物件
-@@ -132,6 +134,7 @@ class Client {
+@@ -132,6 +140,11 @@ class Client {
    bool HighlightCandidateOnCurrentPage(size_t index);
    // 翻页，backward = true 向前翻，false向后翻
    bool ChangePage(bool backward);
 +  bool JevRefresh();
++  bool JevContextQuery();
++  bool JevContextSupported();
++  bool JevContextSet(const std::wstring& wire);
++  bool JevKeyEvent(KeyEvent const& key);
    // 更新输入位置
    void UpdateInputPosition(RECT const& rc);
    // 输入窗口获得焦点

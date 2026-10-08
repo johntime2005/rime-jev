@@ -3,6 +3,7 @@
 Never opens the real user database and never calls a network provider.
 """
 import ctypes as C
+import argparse
 import json
 import os
 from pathlib import Path
@@ -43,7 +44,7 @@ class Commit(C.Structure):
     _fields_ = [('data_size', C.c_int), ('text', C.c_char_p)]
 
 
-def run():
+def run(context_test=False):
     project = Path(__file__).resolve().parents[1]
     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\WOW6432Node\Rime\Weasel') as k:
         install = Path(winreg.QueryValueEx(k, 'WeaselRoot')[0])
@@ -56,6 +57,8 @@ def run():
     shutil.copy2(project / 'lua/jev_windows.lua', data / 'lua/jev_windows.lua')
     schema = (project / 'rime_ice_jev.schema.yaml').read_text()
     schema += '\n  jev_windows/runtime_dir: ' + json.dumps((bridge_root / 'runtime').as_posix()) + '\n'
+    if context_test:
+        schema = schema.replace('jev_windows/context_apps: []', 'jev_windows/context_apps: [jev-context-test.exe]')
     (data / 'rime_ice_jev.schema.yaml').write_text(schema)
     existing_default = (user / 'default.custom.yaml').read_text(encoding='utf-8-sig')
     if 'rime_ice_jev' not in existing_default:
@@ -115,6 +118,79 @@ def run():
         for _ in range(50):
             if (bridge_root / 'runtime/bridge.info').exists(): break
             time.sleep(.1)
+        if context_test:
+            preferences = bridge_root / 'runtime/preferences'
+            preferences.write_text('JEVPREF1\n1\n1\n', encoding='ascii', newline='\n')
+            set_property(sid, b'client_app', b'jev-context-test.exe')
+            set_property(sid, b'client_type', b'tsf')
+            inbox, outbox = bridge_root / 'runtime/inbox', bridge_root / 'runtime/outbox'
+            def prop(name, value):
+                set_property(sid, name.encode(), value.encode())
+            def getprop(name):
+                buf = C.create_string_buffer(2048)
+                get_property(sid, name.encode(), buf, len(buf))
+                return buf.value.decode()
+            def wire(stamp, text='', quality='exact'):
+                encoded = text.encode('utf-16-be').hex()
+                return f'JCTX1|{stamp}|{quality}|{encoded}'
+            def wait_result():
+                for _ in range(100):
+                    files = list(outbox.glob('*.res'))
+                    if files: return files[0]
+                    time.sleep(.04)
+                raise AssertionError('no result')
+            prop('jev_context', 'pending')
+            for letter in 'jingli': key(letter)
+            original = menu()
+            assert not list(inbox.glob('*.json')), 'must wait for native context'
+            prop('jev_context_query', '1')
+            assert getprop('jev_context_consent') == '1', 'allowlist consent not granted'
+            prefix = '\u4f60\u597d  \nemoji \U0001f600'
+            prop('jev_context', wire('1-1-1', prefix))
+            prop('jev_refresh', 'captured')
+            submitted = json.loads(next(inbox.glob('*.json')).read_text(encoding='utf-8'))
+            assert submitted['context'] == prefix and submitted['document']['stamp'] == '1-1-1'
+            result = wait_result()
+            assert result.read_text().splitlines()[-1] == '1-1-1'
+            # A generic filter refresh may not consume a document-bound result.
+            key(65477, 4 | 8)
+            assert menu()['items'][0][0] == original['items'][0][0]
+            # Same caret/pinyin but changed external text cancels the old result.
+            prop('jev_context', wire('1-1-2', 'changed'))
+            assert not result.exists()
+            prop('jev_refresh', 'changed')
+            assert menu()['items'][0][0] == original['items'][0][0]
+            time.sleep(1.1)  # Baseline bridge rate limit.
+            prop('jev_context', wire('1-1-3', prefix))
+            prop('jev_refresh', 'retry')
+            result = wait_result()
+            prop('jev_refresh', 'verified')
+            ranked = menu()
+            assert ranked['items'][0][0] == original['items'][1][0], ranked
+            key(' ')
+            commit = Commit(); commit.data_size = C.sizeof(Commit) - C.sizeof(C.c_int)
+            assert get_commit(sid, C.byref(commit))
+            assert commit.text.decode() == ranked['items'][0][0]
+            free_commit(C.byref(commit))
+            prop('jev_context', 'pending')
+            for letter in 'jingli': key(letter)
+            key(65477, 4)
+            prop('jev_context_query', 'clear')
+            assert getprop('jev_context_consent') == '0'
+            prop('jev_context', wire('1-1-4', '', 'sensitive'))
+            prop('jev_refresh', 'sensitive')
+            assert not list(inbox.glob('*.json')), 'sensitive context must not submit'
+            prop('client_app', 'unlisted.exe')
+            prop('jev_context_query', 'unlisted')
+            assert getprop('jev_context_consent') == '0'
+            preferences.write_text('JEVPREF1\n0\n0\n', encoding='ascii', newline='\n')
+            prop('jev_context_query', 'disabled')
+            assert getprop('jev_context_consent') == '0'
+            print(json.dumps({'native_context_lua': 'PASS', 'exact_whitespace_unicode': True,
+                'stale_document_rejected': True, 'native_only_consumption': True,
+                'displayed_winner_committed': True, 'consent_and_sensitive_gates': True,
+                'live_tsf_gui_tested': False, 'provider_calls': 0, 'root': str(root)}, indent=2))
+            return
         for letter in 'jingli': key(letter)
         original = menu()
         assert len(original['items']) == 7, original
@@ -203,4 +279,6 @@ def run():
 
 
 if __name__ == '__main__':
-    run()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--context', action='store_true')
+    run(parser.parse_args().context)

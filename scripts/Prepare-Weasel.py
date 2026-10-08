@@ -1,6 +1,7 @@
 """Apply the reviewable GPL patch to the pinned upstream checkout; no system edits."""
 from pathlib import Path
 import subprocess
+import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'upstream' / 'weasel'
@@ -21,3 +22,6 @@ else:
     subprocess.run(['git', '-C', str(SOURCE), 'apply', '--check', str(PATCH)], check=True)
     subprocess.run(['git', '-C', str(SOURCE), 'apply', str(PATCH)], check=True)
     print('Pinned Weasel patch applied.')
+
+for header in ('JevContext.h', 'JevTsfContext.h'):
+    shutil.copyfile(ROOT / 'native' / 'include' / header, SOURCE / 'include' / header)

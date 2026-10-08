@@ -17,6 +17,16 @@ export function validateRequest(r, instance, token, now = Date.now() / 1000) {
     || typeof r.preedit !== 'string' || r.preedit.length > 300
     || typeof r.context !== 'string' || [...r.context].length > 80
     || !Array.isArray(r.candidates) || r.candidates.length < 2 || r.candidates.length > 10) fail();
+  if (r.document !== undefined) {
+    const d = r.document;
+    if (!d || d.source !== 'tsf' || !['exact', 'unavailable'].includes(d.quality)
+      || typeof d.stamp !== 'string' || !/^[0-9-]{0,60}$/.test(d.stamp)
+      || (d.quality === 'exact' && !d.stamp) || (d.quality !== 'exact' && r.context !== '')
+      || /[\p{Cs}\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffc]/u.test(r.context)) fail();
+  } else if (r.context !== '') {
+    // Old adapters have only commit history, never authoritative document text.
+    fail();
+  }
   for (const c of r.candidates) {
     if (!c || typeof c.text !== 'string' || !c.text.length || c.text.length > 300
       || !Number.isInteger(c.start) || !Number.isInteger(c.end)
@@ -87,7 +97,9 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
   const exists = async (filename) => { try { await fs.access(filename); return true; } catch { return false; } };
   const respond = async (r, filename, status, value) => {
     if (!await exists(filename) || stopped || Date.now() / 1000 - r.createdAt > 12) return;
-    const result = ['JEVWIN1', r.id, instance, status, String(r.createdAt + 12), String(r.candidates.length), value, ''].join('\n');
+    const result = [r.document ? 'JEVWIN2' : 'JEVWIN1', r.id, instance, status,
+      String(r.createdAt + 12), String(r.candidates.length), value,
+      ...(r.document ? [r.document.stamp] : []), ''].join('\n');
     await atomicWrite(path.join(runtime, 'outbox', `${r.id}.res`), result);
     await fs.rm(filename, { force: true });
   };

@@ -1,6 +1,14 @@
 name: Build Jev Weasel
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'lua/**'
+      - 'bridge.mjs'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/weasel-native.yml'
 permissions:
   contents: read
 jobs:
@@ -25,8 +33,11 @@ jobs:
       - name: Build native components
         shell: pwsh
         run: ./scripts/Build-Weasel.ps1
+      - name: Native context tests
+        shell: pwsh
+        run: ./scripts/Test-NativeContext.ps1
       - name: Unit tests
-        run: node --test tests/bridge.test.mjs tests/provider.test.mjs
+        run: node --test tests/bridge.test.mjs tests/provider.test.mjs tests/context.test.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: weasel-jev-x64-experimental
@@ -36,5 +47,7 @@ jobs:
             native/weasel-jev.patch
             native/LICENSE-GPL-3.0.txt
             native/README.md
+            native/include/
+            native/CONTEXT.md
             lua/jev_windows.lua
           if-no-files-found: error

@@ -9,6 +9,7 @@ import { buildRequest, parseResponse, JevClient } from '../vendor/jev-keyboard/j
 const request = () => ({ protocol: 1, id: 'test_1', session: 'test', sequence: 1,
   instance: 'instance', token: 'token', createdAt: Math.floor(Date.now() / 1000),
   pinyin: 'jingli', caret: 6, preedit: 'jing li', context: '\u4ed6\u62c5\u4efb\u90e8\u95e8',
+  document: { source: 'tsf', quality: 'exact', stamp: '10-20-30' },
   candidates: ['\u7ecf\u5386', '\u7ecf\u7406', '\u7cbe\u529b'].map((text) => ({ text, start: 0, end: 6 })) });
 
 test('validates complete snapshots and rejects malformed, stale, untrusted input', () => {
@@ -87,7 +88,8 @@ test('file IPC works with a deliberately simulated provider, stale auth never pr
       try { output = await fs.readFile(path.join(bridge.runtime, 'outbox', `${r.id}.res`), 'utf8'); break; }
       catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
     }
-    assert.match(output, /\nok\n\d+\n3\n2,1,3\n$/);
+    assert.match(output, /^JEVWIN2\n/);
+    assert.match(output, /\nok\n\d+\n3\n2,1,3\n10-20-30\n$/);
     await atomicWrite(path.join(bridge.runtime, 'inbox', 'bad.json'), JSON.stringify({ ...r, id: 'bad', token: 'bad' }));
     await new Promise((resolve) => setTimeout(resolve, 300));
     await assert.rejects(fs.access(path.join(bridge.runtime, 'outbox', 'bad.res')));

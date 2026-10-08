@@ -41,7 +41,7 @@ try {
     $value = Read-Host '自动请求 y/n [n]（开启后普通拼音也会发送；默认关闭）'
     $auto = $value.Trim().ToLowerInvariant() -eq 'y'
     if ($value.Trim() -and $value.Trim().ToLowerInvariant() -notin @('y','n')) { throw '请输入 y 或 n。' }
-    $value = Read-Host '发送近期提交上文 y/n [n]（默认不取上下文，适用于任意应用）'
+    $value = Read-Host '发送 TSF 上文 y/n [n]（仅支持匹配的原生补丁及 context_apps 允许列表，不支持任意应用）'
     $context = $value.Trim().ToLowerInvariant() -eq 'y'
     if ($value.Trim() -and $value.Trim().ToLowerInvariant() -notin @('y','n')) { throw '请输入 y 或 n。' }
     $keyFile = Join-Path $data 'key.dpapi'

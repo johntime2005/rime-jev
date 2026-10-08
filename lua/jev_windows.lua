@@ -20,14 +20,26 @@ local function json(s)
   end) .. '"'
 end
 
-local function tail(s, count)
-  local positions = {}
-  for i = 1, #s do
-    local b = s:byte(i)
-    if b < 128 or b >= 192 then positions[#positions + 1] = i end
+local function document(value)
+  if value == 'pending' then return { quality = 'pending', stamp = '', text = '' } end
+  local stamp, quality, hex = value:match('^JCTX1|([%d%-]+)|(%a+)|([0-9a-f]*)$')
+  if not stamp or #stamp > 60 or #hex > 640 or #hex % 4 ~= 0
+    or (quality ~= 'exact' and quality ~= 'unavailable' and quality ~= 'sensitive')
+    or (quality ~= 'exact' and hex ~= '') then return { quality = 'unavailable', stamp = '', text = '' } end
+  local chars, high = {}, nil
+  for i = 1, #hex, 4 do
+    local c = tonumber(hex:sub(i, i + 3), 16)
+    if high then
+      if c < 0xdc00 or c > 0xdfff then return nil end
+      chars[#chars + 1] = utf8.char(0x10000 + (high - 0xd800) * 1024 + c - 0xdc00)
+      high = nil
+    elseif c >= 0xd800 and c <= 0xdbff then high = c
+    elseif c >= 0xdc00 and c <= 0xdfff or c == 0 or c == 0xfffc
+      or (c < 32 and c ~= 9 and c ~= 10 and c ~= 13) or c == 127 then return nil
+    else chars[#chars + 1] = utf8.char(c) end
   end
-  if #positions <= count then return s end
-  return s:sub(positions[#positions - count + 1])
+  if high or #chars > 80 then return nil end
+  return { quality = quality, stamp = stamp, text = table.concat(chars) }
 end
 
 local function info(state)
@@ -57,8 +69,13 @@ local function acquire(env)
     local dir = env.engine.schema.config:get_string('jev_windows/runtime_dir')
     if not dir or dir == '' then dir = (os.getenv('LOCALAPPDATA') or '') .. '/RimeJev/runtime' end
     local count = env.engine.schema.config:get_int('menu/page_size') or 7
-    states[id] = { id = id, refs = 0, serial = 0, history = '', history_at = 0,
-      dir = dir, count = math.max(2, math.min(count, 10)), enabled = false }
+    states[id] = { id = id, refs = 0, serial = 0,
+      dir = dir, count = math.max(2, math.min(count, 10)), enabled = false, context_apps = {} }
+    local apps = env.engine.schema.config:get_list('jev_windows/context_apps')
+    if apps then for i = 0, apps.size - 1 do
+      local value = env.engine.schema.config:get_string('jev_windows/context_apps/@' .. i)
+      if value then states[id].context_apps[value:lower()] = true end
+    end end
   end
   env.state = states[id]
   env.state.refs = env.state.refs + 1
@@ -73,8 +90,9 @@ end
 
 local function clear(state)
   cancel(state)
-  state.history, state.history_at, state.snapshot = '', 0, nil
+  state.snapshot = nil
   state.attempted, state.paused = nil, nil
+  state.context_suppressed = nil
 end
 
 local function settings(state)
@@ -84,8 +102,8 @@ local function settings(state)
   -- Explicit local consent is required before ordinary typing can send text.
   local on = enabled == '1'
   if state.enabled ~= on then clear(state); state.enabled = on end
+  if state.use_context ~= nil and state.use_context ~= (context == '1') then clear(state) end
   state.use_context = context == '1'
-  if not state.use_context then state.history = '' end
 end
 
 local function toggle(state)
@@ -127,13 +145,17 @@ local function prepare(buffer, env)
   local app = ctx:get_property('client_app') .. ':' .. ctx:get_property('client_type')
   if state.app and state.app ~= app then clear(state) end
   state.app = app
-  if os.time() - state.history_at > 60 then state.history = '' end
   local snap = { input = ctx.input, caret = ctx.caret_pos,
     preedit = buffer[1] and buffer[1].preedit or ctx.input, candidates = {} }
   for _, c in ipairs(buffer) do
     snap.candidates[#snap.candidates + 1] = { text = c.text, start = c.start, finish = c._end }
   end
-  snap.signature = signature(snap, state.history)
+  local doc = document(ctx:get_property('jev_context'))
+    or { quality = 'unavailable', stamp = '', text = '' }
+  snap.document = doc
+  snap.context = state.use_context and not state.context_suppressed
+    and state.context_apps[ctx:get_property('client_app'):lower()] and doc.quality == 'exact' and doc.text or ''
+  snap.signature = signature(snap, snap.context) .. '|' .. doc.quality .. '|' .. doc.stamp
   if state.snapshot and state.snapshot.signature ~= snap.signature then cancel(state) end
   if state.applied and os.time() > state.applied.expires then cancel(state) end
   state.snapshot = snap
@@ -151,9 +173,9 @@ local function submit(state)
   for _, c in ipairs(snap.candidates) do
     candidates[#candidates + 1] = string.format('{"text":%s,"start":%d,"end":%d}', json(c.text), c.start, c.finish)
   end
-  local body = string.format('{"protocol":1,"id":%s,"instance":%s,"token":%s,"createdAt":%d,"session":%s,"sequence":%d,"pinyin":%s,"caret":%d,"preedit":%s,"context":%s,"candidates":[%s]}',
+  local body = string.format('{"protocol":1,"id":%s,"instance":%s,"token":%s,"createdAt":%d,"session":%s,"sequence":%d,"pinyin":%s,"caret":%d,"preedit":%s,"context":%s,"document":{"source":"tsf","quality":%s,"stamp":%s},"candidates":[%s]}',
     json(id), json(service.instance), json(service.token), os.time(), json(state.id), state.serial,
-    json(snap.input), snap.caret, json(snap.preedit), json(state.history), table.concat(candidates, ','))
+    json(snap.input), snap.caret, json(snap.preedit), json(snap.context), json(snap.document.quality), json(snap.document.stamp), table.concat(candidates, ','))
   if #body > 20000 then state.status = 'request too large'; return end
   local path = state.dir .. '/inbox/' .. id .. '.json'
   local f = io.open(path .. '.tmp', 'wb')
@@ -167,8 +189,10 @@ local function submit(state)
   state.status = 'pending'
 end
 
-local function consume(state)
+local function consume(state, ctx, native)
   local p = state.pending
+  if state.snapshot.document.stamp ~= '' and (not native
+    or ctx:get_property('jev_context') ~= state.context_wire) then return end
   local service = info(state)
   if not service or service.instance ~= p.instance or os.time() - p.created > 12
     or os.time() < p.created or p.signature ~= state.snapshot.signature then
@@ -179,8 +203,9 @@ local function consume(state)
   local rows = {}
   for line in raw:gmatch('([^\n]*)\n') do rows[#rows + 1] = line end
   local count = #state.snapshot.candidates
-  local valid = raw:sub(-1) == '\n' and #rows == 7 and rows[1] == 'JEVWIN1'
+  local valid = raw:sub(-1) == '\n' and #rows == 8 and rows[1] == 'JEVWIN2'
     and rows[2] == p.id and rows[3] == p.instance and tonumber(rows[6]) == count
+    and rows[8] == state.snapshot.document.stamp
   local expires = tonumber(rows[5])
   valid = valid and expires and expires >= os.time() and expires <= os.time() + 15
   local order, seen = {}, {}
@@ -202,16 +227,11 @@ end
 function M.processor.init(env)
   acquire(env)
   local state, ctx = env.state, env.engine.context
-  env.commit = ctx.commit_notifier:connect(function(c)
+  env.commit = ctx.commit_notifier:connect(function()
     cancel(state)
-    local text = c:get_commit_text() or ''
-    if not state.use_context or text:find('[\r\n]') then state.history = ''
-    else
-      if os.time() - state.history_at > 60 then state.history = '' end
-      state.history = tail(state.history .. text, 80)
-    end
-    state.history_at, state.snapshot = os.time(), nil
+    state.snapshot = nil
     state.attempted, state.paused = nil, nil
+    state.context_suppressed = nil
   end)
   env.update = ctx.update_notifier:connect(function(c)
     if state.snapshot and (c.input ~= state.snapshot.input or c.caret_pos ~= state.snapshot.caret) then
@@ -222,7 +242,19 @@ function M.processor.init(env)
     if name == 'ascii_mode' then clear(state) end
   end)
   env.property = ctx.property_update_notifier:connect(function(c, name)
-    if name == 'jev_focus_epoch' then
+    if name == 'jev_context_query' then
+      settings(state)
+      local app = c:get_property('client_app'):lower()
+      c:set_property('jev_context_consent', state.enabled and state.use_context
+        and not state.context_suppressed and state.context_apps[app] and '1' or '0')
+    elseif name == 'jev_context' then
+      local wire = c:get_property(name)
+      if wire ~= state.context_wire then
+        cancel(state)
+        state.snapshot, state.attempted = nil, nil
+        state.context_wire, state.context_dirty = wire, true
+      end
+    elseif name == 'jev_focus_epoch' then
       clear(state)
     elseif name == 'jev_manual_selection' then
       cancel(state)
@@ -230,10 +262,16 @@ function M.processor.init(env)
     elseif name == 'jev_refresh' then
       local success = pcall(function()
         settings(state)
+        if state.context_dirty then
+          state.context_dirty = nil
+          refresh(c)
+          c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
+          return
+        end
         if state.enabled and state.pending and state.snapshot and not state.paused
           and not c:get_option('ascii_mode') and first_page(c)
           and c.input == state.snapshot.input and c.caret_pos == state.snapshot.caret then
-          consume(state)
+          consume(state, c, true)
           if not state.pending then
             refresh(c)
             c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
@@ -259,6 +297,7 @@ local function process(key, env)
   local code = key.keycode
   if code == F8 and key:ctrl() and not key:alt() and not key:super() and not key:shift() then
     clear(state)
+    state.context_suppressed = true
     if ctx:is_composing() then refresh(ctx) end
     return ACCEPTED
   end
@@ -306,11 +345,12 @@ function M.filter.func(input, env)
   if state and state.enabled then
     local ctx, snap = env.engine.context, state.snapshot
     if state.paused and state.paused ~= snap.input then state.paused = nil end
-    if not state.paused and not ctx:get_option('ascii_mode') and first_page(ctx)
+    if not state.paused and snap.document.quality ~= 'pending' and snap.document.quality ~= 'sensitive'
+      and not ctx:get_option('ascii_mode') and first_page(ctx)
       and #snap.candidates >= 2 and #snap.input <= 80 and snap.input:match("^[a-z ']+$")
       and snap.caret == #snap.input then
       local handled = pcall(function()
-        if state.pending then consume(state)
+        if state.pending then consume(state, ctx, false)
         elseif not state.applied and state.attempted ~= snap.signature then
           state.attempted = snap.signature
           submit(state)
