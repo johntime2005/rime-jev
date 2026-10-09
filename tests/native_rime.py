@@ -111,7 +111,7 @@ def run(context_test=False):
             ctx = Context(); ctx.data_size = C.sizeof(Context) - C.sizeof(C.c_int)
             assert get_context(sid, C.byref(ctx))
             try:
-                return {'page': ctx.menu.page_no, 'items': [
+                return {'page': ctx.menu.page_no, 'selected': ctx.menu.highlighted_candidate_index, 'items': [
                     ((ctx.menu.candidates[i].text or b'').decode(), (ctx.menu.candidates[i].comment or b'').decode())
                     for i in range(ctx.menu.num_candidates)]}
             finally: free_context(C.byref(ctx))
@@ -173,11 +173,64 @@ def run(context_test=False):
             assert get_commit(sid, C.byref(commit))
             assert commit.text.decode() == ranked['items'][0][0]
             free_commit(C.byref(commit))
+            # A document recheck after hovering the displayed first candidate
+            # must not regenerate the original menu underneath that selection.
+            time.sleep(1.1)
+            prop('jev_context', 'pending')
+            for letter in 'jingli': key(letter)
+            manual_original = menu()
+            prop('jev_context', wire('1-2-1', prefix))
+            prop('jev_refresh', 'before-manual')
+            wait_result()
+            prop('jev_refresh', 'rank-before-manual')
+            before_manual = menu()
+            assert before_manual['items'][0][0] == manual_original['items'][1][0], before_manual
+            prop('jev_manual_selection', 'hover-first')
+            prop('jev_context', wire('1-2-2', 'edited externally'))
+            prop('jev_refresh', 'after-manual-context-change')
+            after_manual = menu()
+            assert [item[0] for item in after_manual['items']] == [item[0] for item in before_manual['items']], (
+                'context recheck replaced a manually frozen menu', before_manual, after_manual)
+            assert after_manual['selected'] == before_manual['selected']
+            assert getprop('jev_refresh_ack') != 'after-manual-context-change', 'frozen menu must not request UI replacement'
+            assert not list(inbox.glob('*.json')), 'manual selection must not resubmit'
+            key(' ')
+            commit = Commit(); commit.data_size = C.sizeof(Commit) - C.sizeof(C.c_int)
+            assert get_commit(sid, C.byref(commit))
+            assert commit.text.decode() == before_manual['items'][0][0], 'commit changed after manual freeze'
+            free_commit(C.byref(commit))
             prop('jev_context', 'pending')
             for letter in 'jingli': key(letter)
             key(65477, 4)
             prop('jev_context_query', 'clear')
             assert getprop('jev_context_consent') == '0'
+            # Real shortcuts deliver modifier key events too. These do not end
+            # the composition and must not undo Ctrl+F8's context suppression.
+            prop('jev_context', 'pending')  # Native key path invalidates first.
+            key(65507, 4)  # Control_L
+            key(65507, 4 | (1 << 30))
+            prop('jev_context_query', 'after-modifier')
+            assert getprop('jev_context_consent') == '0', 'modifier restored revoked context consent'
+            key('a')
+            prop('jev_context_query', 'after-more-pinyin')
+            assert getprop('jev_context_consent') == '0', 'suppression must last until composition ends'
+            prop('jev_focus_epoch', 'same-composition-focus-change')
+            prop('jev_context_query', 'after-focus-clear')
+            assert getprop('jev_context_consent') == '0', 'focus cleanup restored revoked context consent'
+            for enabled in ('0', '1'):
+                preferences.write_text(f'JEVPREF1\n{enabled}\n1\n', encoding='ascii', newline='\n')
+                prop('jev_context_query', f'after-preference-{enabled}')
+                assert getprop('jev_context_consent') == '0', 'preference cleanup restored revoked context consent'
+            prop('jev_context', wire('1-2-3', prefix))
+            prop('jev_refresh', 'suppressed-document')
+            submitted = json.loads(next(inbox.glob('*.json')).read_text(encoding='utf-8'))
+            assert submitted['context'] == '' and submitted['document']['quality'] == 'unavailable', (
+                'suppressed composition forwarded document text')
+            key(65307)
+            prop('jev_context', 'pending')
+            for letter in 'jingli': key(letter)
+            prop('jev_context_query', 'new-composition')
+            assert getprop('jev_context_consent') == '1', 'new composition must release manual suppression'
             prop('jev_context', wire('1-1-4', '', 'sensitive'))
             prop('jev_refresh', 'sensitive')
             assert not list(inbox.glob('*.json')), 'sensitive context must not submit'
@@ -190,6 +243,8 @@ def run(context_test=False):
             print(json.dumps({'native_context_lua': 'PASS', 'exact_whitespace_unicode': True,
                 'stale_document_rejected': True, 'native_only_consumption': True,
                 'displayed_winner_committed': True, 'consent_and_sensitive_gates': True,
+                'manual_selection_survives_context_change': True,
+                'manual_clear_survives_modifiers': True,
                 'live_tsf_gui_tested': False, 'provider_calls': 0, 'root': str(root)}, indent=2))
             return
         for letter in 'jingli': key(letter)

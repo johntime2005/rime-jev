@@ -1,6 +1,7 @@
 // Real Windows TSF manager + a synthetic app-owned text store. No registration,
 // focus switching, keyboard input, or communication with the installed IME.
 #include "JevTsfContext.h"
+#include "JevEditSession.h"
 #include "tsf_store_stubs.h"
 #include "tsf_scope.h"
 #include <cassert>
@@ -125,6 +126,38 @@ struct EditObserver : ITfTextEditSink {
   }
 };
 
+struct AsyncService {
+  ULONG refs = 1;
+  bool pending = false;
+  unsigned calls = 0, applied = 0;
+  unsigned long long generation = 1;
+  ULONG AddRef() { return ++refs; }
+  ULONG Release() { auto n = --refs; if (!n) delete this; return n; }
+  HRESULT JevEdit(TfEditCookie ec, ITfContext* context, unsigned long long captured) {
+    assert(pending); // A nested timer may not queue another edit during apply.
+    ++calls;
+    if (captured != generation) return S_OK;
+    TF_SELECTION selection = {}; ULONG fetched = 0;
+    assert(SUCCEEDED(context->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) && fetched == 1);
+    selection.range->Release();
+    ++applied;
+    return S_OK;
+  }
+};
+
+static void drain_async(AsyncService* service) {
+  const auto deadline = GetTickCount64() + 3000;
+  while (service->pending && GetTickCount64() < deadline) {
+    MSG message;
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    }
+    if (service->pending) Sleep(1);
+  }
+  assert(!service->pending && "TSF did not release its async session");
+}
+
 int main() {
   assert(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)));
   {
@@ -174,10 +207,55 @@ int main() {
     HRESULT edit_result = E_FAIL;
     assert(SUCCEEDED(context->RequestEditSession(client, reader.Get(), TF_ES_SYNC | TF_ES_READWRITE, &edit_result)));
     assert(SUCCEEDED(edit_result) && observer->called && observer->own);
-    source->UnadviseSink(observer_cookie);
-    doc->Pop(TF_POPF_ALL);
-    manager->Deactivate();
+    assert(SUCCEEDED(source->UnadviseSink(observer_cookie)));
+
+    ComPtr<AsyncService> service; service.Attach(new AsyncService());
+    unsigned queued_count = 0;
+    auto queue = [&]() {
+      assert(!service->pending);
+      const auto before = service->calls;
+      auto edit = new jev::PendingEditSession<AsyncService>(service.Get(), context.Get(), service->generation, service->pending);
+      HRESULT result = E_FAIL;
+      const auto hr = context->RequestEditSession(client, edit, TF_ES_ASYNC | TF_ES_READWRITE, &result);
+      edit->Release();
+      ++queued_count;
+      if (FAILED(hr) || result != TF_S_ASYNC || !service->pending || service->calls != before) {
+        std::cerr << "async queue " << queued_count << ": hr=" << std::hex << hr << " session=" << result
+                  << std::dec << " pending=" << service->pending << " calls=" << service->calls << '\n';
+      }
+      assert(SUCCEEDED(hr) && result == TF_S_ASYNC && service->pending && service->calls == before);
+    };
+    queue();
+    assert(SUCCEEDED(doc->Pop(TF_POPF_ALL))); // No lock/callback after context removal.
+    drain_async(service.Get());
+    assert(service->calls == 0 && service->refs == 1);
+    auto rejected = new jev::PendingEditSession<AsyncService>(service.Get(), context.Get(), service->generation, service->pending);
+    HRESULT rejected_result = E_FAIL;
+    const auto rejected_hr = context->RequestEditSession(client, rejected, TF_ES_ASYNC | TF_ES_READWRITE, &rejected_result);
+    rejected->Release();
+    assert(rejected_hr == TF_E_DISCONNECTED && !service->pending && service->refs == 1);
+    // A popped context remains disconnected; a new composition gets a new one.
+    source.Reset(); reader.Reset(); context.Reset(); store.Reset();
+    store.Attach(new TextStore());
+    assert(SUCCEEDED(doc->CreateContext(client, 0, static_cast<ITextStoreACP*>(store.Get()), &context, &initial)));
+    assert(SUCCEEDED(doc->Push(context.Get())));
+    queue();
+    drain_async(service.Get());
+    assert(service->calls == 1 && service->applied == 1);
+    queue();
+    ++service->generation;
+    drain_async(service.Get());
+    assert(service->calls == 2 && service->applied == 1);
+
+    queue();
+    ++service->generation;
+    assert(SUCCEEDED(manager->Deactivate()));
+    drain_async(service.Get());
+    // An app-owned TSF client is not a registered TIP: manager shutdown may
+    // dispatch its queued callback while unwinding, but it must be stale.
+    assert(service->calls >= 2 && service->calls <= 3 && service->applied == 1 && service->refs == 1);
+    assert(SUCCEEDED(doc->Pop(TF_POPF_ALL)));
   }
   CoUninitialize();
-  std::cout << "Windows TSF-manager text-store integration PASS (no live IME GUI)\n";
+  std::cout << "Windows TSF-manager text-store + async cancellation integration PASS (no live IME GUI)\n";
 }

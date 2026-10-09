@@ -23,5 +23,5 @@ else:
     subprocess.run(['git', '-C', str(SOURCE), 'apply', str(PATCH)], check=True)
     print('Pinned Weasel patch applied.')
 
-for header in ('JevContext.h', 'JevTsfContext.h'):
+for header in ('JevContext.h', 'JevTsfContext.h', 'JevEditSession.h'):
     shutil.copyfile(ROOT / 'native' / 'include' / header, SOURCE / 'include' / header)

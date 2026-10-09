@@ -92,7 +92,7 @@ local function clear(state)
   cancel(state)
   state.snapshot = nil
   state.attempted, state.paused = nil, nil
-  state.context_suppressed = nil
+  -- Manual context suppression ends with the composition, not housekeeping.
 end
 
 local function settings(state)
@@ -237,6 +237,7 @@ function M.processor.init(env)
     state.context_suppressed = nil
   end)
   env.update = ctx.update_notifier:connect(function(c)
+    if c.input == '' then state.context_suppressed = nil end
     if state.snapshot and (c.input ~= state.snapshot.input or c.caret_pos ~= state.snapshot.caret) then
       cancel(state); state.snapshot = nil
     end
@@ -267,9 +268,12 @@ function M.processor.init(env)
         settings(state)
         if state.context_dirty then
           state.context_dirty = nil
-          refresh(c)
-          c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
-          return
+          -- A new document stamp cancels requests, not the user's selection.
+          if not state.paused then
+            refresh(c)
+            c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
+            return
+          end
         end
         if state.enabled and state.pending and state.snapshot and not state.paused
           and not c:get_option('ascii_mode') and first_page(c)
@@ -298,6 +302,9 @@ local function process(key, env)
   if not state or key:release() then return NOOP end
   settings(state)
   local code = key.keycode
+  if not ctx:is_composing() then state.context_suppressed = nil end
+  -- A modifier is not an editing action or the end of the composition.
+  if (code >= 65505 and code <= 65518) or code == 65027 or code == 65406 then return NOOP end
   if code == F8 and key:ctrl() and not key:alt() and not key:super() and not key:shift() then
     clear(state)
     state.context_suppressed = true
