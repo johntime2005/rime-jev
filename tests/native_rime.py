@@ -46,7 +46,7 @@ class Commit(C.Structure):
     _fields_ = [('data_size', C.c_int), ('text', C.c_char_p)]
 
 
-def run(typing_profile=False, nasal_profile=False, pebrel_context=False):
+def run(typing_profile=False, nasal_profile=False, pebrel_context=False, context_test=False):
     project = Path(__file__).resolve().parents[1]
     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\WOW6432Node\Rime\Weasel') as k:
         install = Path(winreg.QueryValueEx(k, 'WeaselRoot')[0])
@@ -60,6 +60,8 @@ def run(typing_profile=False, nasal_profile=False, pebrel_context=False):
     shutil.copy2(project / 'lua/jev_windows.lua', data / 'lua/jev_windows.lua')
     schema = (project / 'rime_ice_jev.schema.yaml').read_text()
     schema += '\n  - jev_windows/runtime_dir: ' + json.dumps((bridge_root / 'runtime').as_posix()) + '\n'
+    if context_test:
+        schema = schema.replace('jev_windows/context_apps: []', 'jev_windows/context_apps: [jev-context-test.exe]')
     (data / 'rime_ice_jev.schema.yaml').write_text(schema)
     if typing_profile or nasal_profile:
         spec = importlib.util.spec_from_file_location('typing_profile', project / 'scripts/Typing-Profile.py')
@@ -129,6 +131,135 @@ def run(typing_profile=False, nasal_profile=False, pebrel_context=False):
         for _ in range(50):
             if (bridge_root / 'runtime/bridge.info').exists(): break
             time.sleep(.1)
+        if context_test:
+            preferences = bridge_root / 'runtime/preferences'
+            preferences.write_text('JEVPREF1\n1\n1\n', encoding='ascii', newline='\n')
+            set_property(sid, b'client_app', b'jev-context-test.exe')
+            set_property(sid, b'client_type', b'tsf')
+            inbox, outbox = bridge_root / 'runtime/inbox', bridge_root / 'runtime/outbox'
+            def prop(name, value):
+                set_property(sid, name.encode(), value.encode())
+            def getprop(name):
+                buf = C.create_string_buffer(2048)
+                get_property(sid, name.encode(), buf, len(buf))
+                return buf.value.decode()
+            def wire(stamp, text='', quality='exact'):
+                encoded = text.encode('utf-16-be').hex()
+                return f'JCTX1|{stamp}|{quality}|{encoded}'
+            def wait_result():
+                for _ in range(100):
+                    files = list(outbox.glob('*.res'))
+                    if files: return files[0]
+                    time.sleep(.04)
+                raise AssertionError('no result')
+            prop('jev_context', 'pending')
+            for letter in 'jingli': key(letter)
+            original = menu()
+            assert '[Jev: pending]' in original['items'][0][1], 'context capture must start the native timer'
+            assert not list(inbox.glob('*.json')), 'must wait for native context'
+            prop('jev_context_query', '1')
+            assert getprop('jev_context_consent') == '1', 'allowlist consent not granted'
+            prefix = '\u4f60\u597d  \nemoji \U0001f600'
+            prop('jev_context', wire('1-1-1', prefix))
+            prop('jev_refresh', 'captured')
+            submitted = json.loads(next(inbox.glob('*.json')).read_text(encoding='utf-8'))
+            assert submitted['context'] == prefix and submitted['document']['stamp'] == '1-1-1'
+            result = wait_result()
+            assert result.read_text().splitlines()[-1] == '1-1-1'
+            # A generic filter refresh may not consume a document-bound result.
+            key(65477, 4 | 8)
+            assert menu()['items'][0][0] == original['items'][0][0]
+            # Same caret/pinyin but changed external text cancels the old result.
+            prop('jev_context', wire('1-1-2', 'changed'))
+            assert not result.exists()
+            prop('jev_refresh', 'changed')
+            assert menu()['items'][0][0] == original['items'][0][0]
+            time.sleep(1.1)  # Baseline bridge rate limit.
+            prop('jev_context', wire('1-1-3', prefix))
+            prop('jev_refresh', 'retry')
+            result = wait_result()
+            prop('jev_refresh', 'verified')
+            ranked = menu()
+            assert ranked['items'][0][0] == original['items'][1][0], ranked
+            key(' ')
+            commit = Commit(); commit.data_size = C.sizeof(Commit) - C.sizeof(C.c_int)
+            assert get_commit(sid, C.byref(commit))
+            assert commit.text.decode() == ranked['items'][0][0]
+            free_commit(C.byref(commit))
+            # A document recheck after hovering the displayed first candidate
+            # must not regenerate the original menu underneath that selection.
+            time.sleep(1.1)
+            prop('jev_context', 'pending')
+            for letter in 'jingli': key(letter)
+            manual_original = menu()
+            prop('jev_context', wire('1-2-1', prefix))
+            prop('jev_refresh', 'before-manual')
+            wait_result()
+            prop('jev_refresh', 'rank-before-manual')
+            before_manual = menu()
+            assert before_manual['items'][0][0] == manual_original['items'][1][0], before_manual
+            prop('jev_manual_selection', 'hover-first')
+            prop('jev_context', wire('1-2-2', 'edited externally'))
+            prop('jev_refresh', 'after-manual-context-change')
+            after_manual = menu()
+            assert [item[0] for item in after_manual['items']] == [item[0] for item in before_manual['items']], (
+                'context recheck replaced a manually frozen menu', before_manual, after_manual)
+            assert after_manual['selected'] == before_manual['selected']
+            assert getprop('jev_refresh_ack') != 'after-manual-context-change', 'frozen menu must not request UI replacement'
+            assert not list(inbox.glob('*.json')), 'manual selection must not resubmit'
+            key(' ')
+            commit = Commit(); commit.data_size = C.sizeof(Commit) - C.sizeof(C.c_int)
+            assert get_commit(sid, C.byref(commit))
+            assert commit.text.decode() == before_manual['items'][0][0], 'commit changed after manual freeze'
+            free_commit(C.byref(commit))
+            prop('jev_context', 'pending')
+            for letter in 'jingli': key(letter)
+            key(65477, 4)
+            prop('jev_context_query', 'clear')
+            assert getprop('jev_context_consent') == '0'
+            # Real shortcuts deliver modifier key events too. These do not end
+            # the composition and must not undo Ctrl+F8's context suppression.
+            prop('jev_context', 'pending')  # Native key path invalidates first.
+            key(65507, 4)  # Control_L
+            key(65507, 4 | (1 << 30))
+            prop('jev_context_query', 'after-modifier')
+            assert getprop('jev_context_consent') == '0', 'modifier restored revoked context consent'
+            key('a')
+            prop('jev_context_query', 'after-more-pinyin')
+            assert getprop('jev_context_consent') == '0', 'suppression must last until composition ends'
+            prop('jev_focus_epoch', 'same-composition-focus-change')
+            prop('jev_context_query', 'after-focus-clear')
+            assert getprop('jev_context_consent') == '0', 'focus cleanup restored revoked context consent'
+            for enabled in ('0', '1'):
+                preferences.write_text(f'JEVPREF1\n{enabled}\n1\n', encoding='ascii', newline='\n')
+                prop('jev_context_query', f'after-preference-{enabled}')
+                assert getprop('jev_context_consent') == '0', 'preference cleanup restored revoked context consent'
+            prop('jev_context', wire('1-2-3', prefix))
+            prop('jev_refresh', 'suppressed-document')
+            submitted = json.loads(next(inbox.glob('*.json')).read_text(encoding='utf-8'))
+            assert submitted['context'] == '' and submitted['document']['quality'] == 'unavailable', (
+                'suppressed composition forwarded document text')
+            key(65307)
+            prop('jev_context', 'pending')
+            for letter in 'jingli': key(letter)
+            prop('jev_context_query', 'new-composition')
+            assert getprop('jev_context_consent') == '1', 'new composition must release manual suppression'
+            prop('jev_context', wire('1-1-4', '', 'sensitive'))
+            prop('jev_refresh', 'sensitive')
+            assert not list(inbox.glob('*.json')), 'sensitive context must not submit'
+            prop('client_app', 'unlisted.exe')
+            prop('jev_context_query', 'unlisted')
+            assert getprop('jev_context_consent') == '0'
+            preferences.write_text('JEVPREF1\n0\n0\n', encoding='ascii', newline='\n')
+            prop('jev_context_query', 'disabled')
+            assert getprop('jev_context_consent') == '0'
+            print(json.dumps({'native_context_lua': 'PASS', 'exact_whitespace_unicode': True,
+                'stale_document_rejected': True, 'native_only_consumption': True,
+                'displayed_winner_committed': True, 'consent_and_sensitive_gates': True,
+                'manual_selection_survives_context_change': True,
+                'manual_clear_survives_modifiers': True,
+                'live_tsf_gui_tested': False, 'provider_calls': 0, 'root': str(root)}, indent=2))
+            return
         if pebrel_context:
             # The caller puts a known, unsubmitted draft in the focused Codex
             # composer. This test never types, submits, or calls a real provider.
@@ -213,8 +344,7 @@ def run(typing_profile=False, nasal_profile=False, pebrel_context=False):
         assert get_commit(sid, C.byref(commit))
         assert commit.text.decode() == original['items'][0][0]
         free_commit(C.byref(commit))
-        # Context-enabled production behavior was not covered by the original
-        # mock tests. Check the actual request before the mock consumes it.
+        # Real commits must not masquerade as the current application's buffer.
         (bridge_root / 'runtime/preferences').write_text('JEVPREF1\n1\n1\n', encoding='ascii', newline='\n')
         key(65477, 4)
         committed_prefix = ''
@@ -229,9 +359,10 @@ def run(typing_profile=False, nasal_profile=False, pebrel_context=False):
         requests = list((bridge_root / 'runtime/inbox').glob('*.json'))
         assert len(requests) == 1, ('missing context request', len(requests), menu())
         submitted = json.loads(requests[0].read_text(encoding='utf-8'))
-        assert submitted['context'] == committed_prefix, ('committed context missing', len(submitted['context']), len(committed_prefix))
+        assert committed_prefix and submitted['context'] == '', 'commit history leaked into document context'
         assert submitted['pinyin'] == 'jingli'
-        assert submitted['contextState'] == {'enabled': True, 'reason': 'available', 'source': 'history'}
+        assert submitted['document'] == {'source': 'tsf', 'quality': 'unavailable', 'stamp': ''}
+        assert submitted['contextState']['source'] == 'none'
         prior_epoch = submitted['cacheEpoch']
         set_property(sid, b'jev_focus_epoch', b'context-focus-left')
         for _ in range(100):
@@ -434,7 +565,7 @@ def run(typing_profile=False, nasal_profile=False, pebrel_context=False):
             'persistent_toggle': True, 'no_unseen_swap_on_space': True, 'property_refresh': True,
             'focus_invalidates_pending': True, 'gui_timer_tested': False,
             'native_receipt_observed': True, 'identity_order_not_reported_as_ranked': True,
-            'committed_context_sent': True,
+            'commit_history_not_used_as_document': True,
             'pebrel_context_request_without_history': True,
             'manual_clear_suppresses_document_context': True,
             'context_clear_reason_and_cancel_receipt': True,
@@ -460,5 +591,6 @@ if __name__ == '__main__':
     profiles.add_argument('--typing-profile', action='store_true')
     profiles.add_argument('--nasal-profile', action='store_true')
     profiles.add_argument('--pebrel-context', action='store_true')
+    profiles.add_argument('--context', action='store_true')
     args = parser.parse_args()
-    run(args.typing_profile, args.nasal_profile, args.pebrel_context)
+    run(args.typing_profile, args.nasal_profile, args.pebrel_context, args.context)

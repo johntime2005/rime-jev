@@ -16,14 +16,21 @@ on a new thread. Existing upstream key simulation unrelated to Jev is unmodified
 
 Checks include active server session, TSF context identity, foreground process,
 input-event generation, first-page selection, Lua input/caret/snapshot/expiry,
-and explicit enable preference. FocusOut clears pending text and history.
+and explicit enable preference. FocusOut cancels pending requests.
 Password/disabled TSF contexts are excluded; this is not universal DLP.
+
+The patch also supports explicitly opted-in TSF surrounding text. An empty
+application allowlist is the default. Capture excludes the composition and
+preserves real whitespace; results carry a document stamp and are rechecked
+under the native edit lock before applying. Cancelled async edit sessions free
+their pending slot on final Release, even when TSF never runs their callback.
+See `CONTEXT.md` for consent, Unicode bounds, tests and remaining release gates.
 
 The separate `context-pebrel.mjs` bridge adapter can read a verified Codex
 composer via Pebrel's local Runtime API when explicitly configured. It does
-not use a new TSF surrounding-text patch or require replacing these binaries.
+not require adding the terminal to the TSF text-store allowlist.
 Its visible-grid/read latency and privacy boundaries are documented in the
-root README and `VALIDATION.md`; other applications still use commit history.
+root README and `VALIDATION.md`. Commit history is no longer used as context.
 
 Build with `scripts/Build-Weasel.ps1` in a VS 2022 developer environment with
 ATL, MSBuild, Python and 7-Zip, or dispatch the GitHub Actions workflow.
@@ -45,14 +52,15 @@ Download the `weasel-jev-x64-experimental` artifact from a successful matching
 build, then stage it with the current adapter (no installation occurs):
 
 ```powershell
-python scripts/Package-Native.py --artifact runtime/native-build-current --output runtime/native-bundle --source-label github-run-37628405246
-python scripts/Package-Native.py --verify runtime/native-bundle
+python scripts/Package-Native.py --artifact runtime/native-artifact-37888288576-aaf1cae --output runtime/native-bundle-context --source-label github-run-37888288576
+python scripts/Package-Native.py --verify runtime/native-bundle-context
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-The packager rejects a different patch, missing inputs, non-x64 binaries, and
-an existing destination. `manifest.json` records exact SHA-256 hashes of the
-binaries and companion sources. Verification detects changed files; it does
+The packager rejects a different patch or any different/missing native header,
+missing inputs, non-x64 binaries, and an existing destination. `manifest.json`
+records exact SHA-256 hashes of the binaries, native headers, Lua/schema and
+bridge/provider dependencies. Verification detects changed files; it does
 not authenticate the caller-supplied source label or certify TSF behavior.
 CI also publishes `weasel-jev-x64-bundle` with a manifest. The bundle is not a
 standalone installer: it still requires the matching Weasel runtime and Rime

@@ -11,7 +11,7 @@ const safeId = (s) => typeof s === 'string' && /^[a-zA-Z0-9_]{1,160}$/.test(s);
 const POLL_MS = 20;
 const CANCEL_REASONS = new Set(['session_closed', 'adapter_error', 'auto_toggle', 'context_option_changed',
   'app_changed', 'snapshot_changed', 'expired', 'committed', 'input_changed', 'caret_changed',
-  'ascii_mode', 'focus_changed', 'manual_selection', 'manual_clear', 'escape', 'enter', 'shortcut', 'editing', 'navigation']);
+  'ascii_mode', 'focus_changed', 'manual_selection', 'manual_clear', 'escape', 'enter', 'shortcut', 'editing', 'navigation', 'document_changed']);
 const CONTEXT_REASONS = new Set([...CANCEL_REASONS, 'disabled', 'available', 'session_start', 'idle_timeout', 'newline',
   'context_pending', 'document_empty', 'context_unavailable']);
 const CONTEXT_ERRORS = new Set(['CONTEXT_RUNTIME_UNAVAILABLE', 'CONTEXT_RUNTIME_INVALID', 'CONTEXT_RUNTIME_UNSUPPORTED',
@@ -29,9 +29,9 @@ function contextState(r) {
   // Reconstruct the object: unknown fields must not become a text logging path.
   const safe = { enabled: value.enabled, reason: value.reason };
   if (value.source !== undefined) {
-    if (!['none', 'history', 'pebrel_codex'].includes(value.source)
+    if (!['none', 'tsf', 'pebrel_codex'].includes(value.source)
       || (value.source === 'none' && r.context !== '')
-      || (value.source === 'history' && (!value.enabled || r.context === ''))
+      || (value.source === 'tsf' && (!value.enabled || r.document?.quality !== 'exact'))
       || (value.source === 'pebrel_codex' && (!value.enabled || r.contextTarget !== 'pebrel'))) {
       throw new Error('INVALID_REQUEST');
     }
@@ -51,6 +51,16 @@ export function validateRequest(r, instance, token, now = Date.now() / 1000) {
     || typeof r.context !== 'string' || [...r.context].length > 80
     || (r.cacheEpoch !== undefined && (!Number.isSafeInteger(r.cacheEpoch) || r.cacheEpoch < 0))
     || !Array.isArray(r.candidates) || r.candidates.length < 2 || r.candidates.length > 10) fail();
+  if (r.document !== undefined) {
+    const d = r.document;
+    if (!d || d.source !== 'tsf' || !['exact', 'unavailable'].includes(d.quality)
+      || typeof d.stamp !== 'string' || !/^[0-9-]{0,60}$/.test(d.stamp)
+      || (d.quality === 'exact' && !d.stamp) || (d.quality !== 'exact' && r.context !== '')
+      || /[\p{Cs}\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffc]/u.test(r.context)) fail();
+  } else if (r.context !== '') {
+    // Old adapters have only commit history, never authoritative document text.
+    fail();
+  }
   for (const c of r.candidates) {
     if (!c || typeof c.text !== 'string' || !c.text.length || c.text.length > 300
       || !Number.isInteger(c.start) || !Number.isInteger(c.end)
@@ -59,7 +69,8 @@ export function validateRequest(r, instance, token, now = Date.now() / 1000) {
   const state = contextState(r);
   if (r.contextTarget !== undefined && r.contextTarget !== null
     && (r.contextTarget !== 'pebrel' || r.context !== '' || state?.enabled !== true
-      || state.reason !== 'context_pending' || state.source !== 'pebrel_codex')) fail();
+      || state.reason !== 'context_pending' || state.source !== 'pebrel_codex'
+      || (r.document !== undefined && r.document.quality !== 'unavailable'))) fail();
   if (state?.reason === 'context_pending' && r.contextTarget !== 'pebrel') fail();
   return { pinyin: r.pinyin, preedit: r.preedit, topK: r.candidates.length,
     candidates: r.candidates.map((c, i) => ({ id: `c${i + 1}`, text: c.text, originalRank: i + 1 })) };
@@ -180,7 +191,9 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
   };
   const respond = async (r, filename, status, value, timing) => {
     if (!await exists(filename) || stopped || Date.now() / 1000 - r.createdAt > 12) return false;
-    const result = ['JEVWIN1', r.id, instance, status, String(r.createdAt + 12), String(r.candidates.length), value, ''].join('\n');
+    const result = [r.document ? 'JEVWIN2' : 'JEVWIN1', r.id, instance, status,
+      String(r.createdAt + 12), String(r.candidates.length), value,
+      ...(r.document ? [r.document.stamp] : []), ''].join('\n');
     await atomicWrite(path.join(runtime, 'outbox', `${r.id}.res`), result);
     const winner = status === 'ok' ? Number(value.split(',')[0]) : null;
     const decision = status === 'ok' ? winner === 1 ? 'same_first' : 'promoted' : status;
@@ -275,7 +288,7 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
       timing = { submittedAt: stat.mtimeMs, discoveryMs: Math.max(0, Math.round(Date.now() - stat.mtimeMs)),
         providerMs: null, contextChars: [...r.context].length, contextState: contextState(r) };
       let cacheKey = createHash('sha256').update(JSON.stringify([r.session, r.cacheEpoch ?? null,
-        r.contextState?.enabled ?? null, r.context, r.pinyin, r.caret, r.preedit, r.candidates])).digest('hex');
+        r.contextState?.enabled ?? null, r.document ?? null, r.context, r.pinyin, r.caret, r.preedit, r.candidates])).digest('hex');
       // A document read must precede cache lookup; identical IME input can now
       // refer to a different draft, caret, pane, or foreground window.
       const cached = r.contextTarget ? null : cache.get(cacheKey);

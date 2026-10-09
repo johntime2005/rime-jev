@@ -1,6 +1,53 @@
 # Native refresh validation status
 
-Last checked: 2026-10-08.
+Last checked: 2026-10-09.
+
+## Integrated context and cancellation continuation
+
+Integrated `feat/tsf-surrounding-context` at `aaf1cae` with the main branch's
+worker isolation, continuation prompt, Pebrel context adapter, cancellation
+receipts and personal typing-profile support. The merge does not revert the
+100ms debounce, provider settings or local nasal profile. Commit history is
+no longer forwarded as document text. TSF capture remains opt-in, with an empty
+default app allowlist. See `CONTEXT.md` for the native privacy/freshness contract.
+
+Local verification on 2026-10-09, without live provider calls or GUI typing:
+
+- All 56 Node tests pass, including local hung transports, worker exits,
+  cancellation recovery, mixed-version protocol, TSF text validation and the
+  Pebrel adapter's controlled Runtime fixtures. Response assertions now check
+  the entire v2 envelope, including document stamp, for errors as well as ranks.
+- All nine Python unit tests pass. Packaging rejects mismatched/missing native
+  headers as well as the patch, and includes the bridge/provider dependencies.
+  Synthetic PE fixtures test packaging only, not executable compatibility.
+- Four native C++ executables compile with VS 2022 and pass: scalar/protocol,
+  controlled text store, async-session ownership and real Windows TSF manager.
+  The manager test does not activate the installed TIP or certify its UI.
+- Isolated librime tests pass in ordinary, `--context`, `--typing-profile` and
+  `--nasal-profile` modes. Manual choice, Space commit, focus invalidation,
+  timeout labels, context suppression and original-prism preservation pass.
+- `Configure.ps1` parses successfully in Windows PowerShell; its UTF-8 BOM is
+  retained for the Chinese console prompts. This is not interactive acceptance.
+
+Native binaries were downloaded from the successful full DLL/server build
+https://github.com/johntime2005/rime-jev/actions/runs/37888288576 at `aaf1cae`.
+The patch and all three native headers match the merged working tree after
+line-ending normalization. The combined adapter is tested locally; the
+feature-branch CI run is not represented as a build of the later merge commit.
+The new DLL passes unregistered COM load/create/release in a disposable Python
+process, but still retains one service reference (`DllCanUnloadNow=S_FALSE`).
+This is not hot-unload acceptance. No complete native rebuild was run locally.
+
+Inspection found that the installed Lua still enabled Jev only for
+`jev-context-trial.exe`, and the schema directed IPC to the stopped local trial
+bridge. The installation manifest matched those files; a live ordinary bridge
+running elsewhere therefore received no input requests. The earlier cancelled
+UAC receipt did not describe the later successful 2026-10-08 trial replacement.
+Deployment and backup state are recorded separately in `REPLACEMENT.md`.
+
+Visible candidate-window behavior, real target applications, key-path latency
+and daily-use stability still require acceptance; these tests do not certify
+terminal/game support or universal sensitive-field detection.
 
 ## Continuation-choice failure and request-design correction
 

@@ -9,6 +9,18 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_REVISION = '9cc96e20dc71b80876b12f689bb5863c76c2a7ed'
+NATIVE_SOURCES = (
+    'native/weasel-jev.patch',
+    'native/include/JevContext.h',
+    'native/include/JevTsfContext.h',
+    'native/include/JevEditSession.h',
+)
+BRIDGE_SOURCES = (
+    'LICENSE', 'bridge.mjs', 'context-pebrel.mjs', 'provider.mjs',
+    'provider-isolate.mjs', 'provider-worker.mjs',
+    'vendor/jev-keyboard/jev.mjs', 'vendor/jev-keyboard/ime-completion.mjs',
+    'vendor/jev-keyboard/LICENSE', 'vendor/jev-keyboard/UPSTREAM.md',
+)
 
 
 def digest(path):
@@ -29,18 +41,22 @@ def check_x64(path):
 def package(artifact, output, source_label):
     artifact, output = artifact.resolve(), output.resolve()
     # Text checkout line endings differ between GitHub and local Windows Git.
-    patch = ROOT / 'native/weasel-jev.patch'
-    if (artifact / 'native/weasel-jev.patch').read_bytes().replace(b'\r\n', b'\n') != patch.read_bytes().replace(b'\r\n', b'\n'):
-        raise ValueError('Artifact patch does not match the current native source.')
+    for name in NATIVE_SOURCES:
+        built, current = artifact / name, ROOT / name
+        if not built.is_file() or not current.is_file():
+            raise ValueError(f'Missing native build input: {name}')
+        if built.read_bytes().replace(b'\r\n', b'\n') != current.read_bytes().replace(b'\r\n', b'\n'):
+            raise ValueError(f'Artifact does not match the current native source: {name}')
     files = {
         'WeaselServer.exe': artifact / 'upstream/weasel/output/WeaselServer.exe',
         'weaselx64.dll': artifact / 'upstream/weasel/output/weaselx64.dll',
         'lua/jev_windows.lua': ROOT / 'lua/jev_windows.lua',
         'rime_ice_jev.schema.yaml': ROOT / 'rime_ice_jev.schema.yaml',
-        'native/weasel-jev.patch': patch,
         'native/LICENSE-GPL-3.0.txt': ROOT / 'native/LICENSE-GPL-3.0.txt',
         'native/README.md': ROOT / 'native/README.md',
         'native/VALIDATION.md': ROOT / 'native/VALIDATION.md',
+        'native/CONTEXT.md': ROOT / 'native/CONTEXT.md',
+        **{name: ROOT / name for name in (*NATIVE_SOURCES, *BRIDGE_SOURCES)},
     }
     for name, path in files.items():
         if not path.is_file():

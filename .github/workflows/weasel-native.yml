@@ -1,6 +1,17 @@
 name: Build Jev Weasel
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'lua/**'
+      - 'bridge.mjs'
+      - 'context-pebrel.mjs'
+      - 'provider*.mjs'
+      - 'rime_ice_jev.schema.yaml'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/weasel-native.yml'
 permissions:
   contents: read
 jobs:
@@ -25,8 +36,11 @@ jobs:
       - name: Build native components
         shell: pwsh
         run: ./scripts/Build-Weasel.ps1
+      - name: Native context tests
+        shell: pwsh
+        run: ./scripts/Test-NativeContext.ps1
       - name: Unit tests
-        run: node --test tests/bridge.test.mjs tests/provider.test.mjs tests/context-pebrel.test.mjs
+        run: node --test tests/bridge.test.mjs tests/provider.test.mjs tests/context-pebrel.test.mjs tests/context.test.mjs
       - name: Packaging tests
         run: python -m unittest discover -s tests -p "test_*.py"
       - name: Stage matched bundle
@@ -45,5 +59,7 @@ jobs:
             native/weasel-jev.patch
             native/LICENSE-GPL-3.0.txt
             native/README.md
+            native/include/
+            native/CONTEXT.md
             lua/jev_windows.lua
           if-no-files-found: error

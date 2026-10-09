@@ -45,7 +45,7 @@ try {
     $value = Read-Host '自动请求 y/n [n]（开启后普通拼音也会发送；默认关闭）'
     $auto = $value.Trim().ToLowerInvariant() -eq 'y'
     if ($value.Trim() -and $value.Trim().ToLowerInvariant() -notin @('y','n')) { throw '请输入 y 或 n。' }
-    $value = Read-Host '发送光标前上文 y/n [n]（默认关闭；其他应用仍是近期提交历史，不等于真实正文）'
+    $value = Read-Host '发送光标前上文 y/n [n]（默认关闭；仅限明确配置的 TSF 应用或 Pebrel 适配，不使用提交历史）'
     $context = $value.Trim().ToLowerInvariant() -eq 'y'
     if ($value.Trim() -and $value.Trim().ToLowerInvariant() -notin @('y','n')) { throw '请输入 y 或 n。' }
     $documentContext = $config.contextProvider

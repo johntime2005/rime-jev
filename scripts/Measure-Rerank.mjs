@@ -36,6 +36,7 @@ for (const [index, sample] of cases.entries()) {
     await atomicWrite(input, JSON.stringify({ protocol: 1, id, session, sequence: index + 1,
       instance, token, createdAt: Math.floor(Date.now() / 1000), pinyin: sample.pinyin,
       caret: sample.pinyin.length, preedit: sample.pinyin, context: sample.context,
+      document: { source: 'tsf', quality: 'exact', stamp: `0-0-${index + 1}` },
       candidates: sample.candidates.map((text) => ({ text, start: 0, end: sample.pinyin.length })) }));
     let rows;
     while (performance.now() - started < 6000) {

@@ -13,5 +13,7 @@ __patch:
     translator/prism: rime_ice_jev
     engine/processors/@before 0: lua_processor@*jev_windows*processor
     engine/filters/@next: lua_filter@*jev_windows*filter
+    # Opt in only after validating the application's actual TSF text store.
+    jev_windows/context_apps: []
   # Explicit __patch disables Rime's automatic .custom loading unless included.
   - rime_ice_jev.custom:/patch?

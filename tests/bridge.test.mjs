@@ -10,7 +10,14 @@ import { buildRequest, parseResponse, JevClient } from '../vendor/jev-keyboard/j
 const request = () => ({ protocol: 1, id: 'test_1', session: 'test', sequence: 1,
   instance: 'instance', token: 'token', createdAt: Math.floor(Date.now() / 1000),
   pinyin: 'jingli', caret: 6, preedit: 'jing li', context: '\u4ed6\u62c5\u4efb\u90e8\u95e8',
+  document: { source: 'tsf', quality: 'exact', stamp: '10-20-30' },
   candidates: ['\u7ecf\u5386', '\u7ecf\u7406', '\u7cbe\u529b'].map((text) => ({ text, start: 0, end: 6 })) });
+
+function assertResponse(raw, r, status, value) {
+  assert.equal(raw, [r.document ? 'JEVWIN2' : 'JEVWIN1', r.id, r.instance, status,
+    String(r.createdAt + 12), String(r.candidates.length), value,
+    ...(r.document ? [r.document.stamp] : []), ''].join('\n'));
+}
 
 const uncooperativeWorker = new URL('./fixtures/uncooperative-provider.mjs', import.meta.url);
 
@@ -91,6 +98,7 @@ test('context diagnostics accept only enums consistent with the request', () => 
 });
 
 const documentRequest = () => ({ ...request(), context: '', contextTarget: 'pebrel',
+  document: { source: 'tsf', quality: 'unavailable', stamp: '10-20-30' },
   contextState: { enabled: true, reason: 'context_pending', source: 'pebrel_codex' } });
 
 test('document context requires explicit consent and a recognized empty-text request', () => {
@@ -379,7 +387,7 @@ test('file IPC works with a deliberately simulated provider, stale auth never pr
       try { output = await fs.readFile(path.join(bridge.runtime, 'outbox', `${r.id}.res`), 'utf8'); break; }
       catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
     }
-    assert.match(output, /\nok\n\d+\n3\n2,1,3\n$/);
+    assertResponse(output, r, 'ok', '2,1,3');
     await atomicWrite(path.join(bridge.runtime, 'inbox', 'bad.json'), JSON.stringify({ ...r, id: 'bad', token: 'bad' }));
     await new Promise((resolve) => setTimeout(resolve, 300));
     await assert.rejects(fs.access(path.join(bridge.runtime, 'outbox', 'bad.res')));
@@ -529,7 +537,7 @@ test('a hung provider times out, leaves no active request, and does not block th
         assert.ok(waiting.requestState.ageMs >= 0);
       }
       const result = await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', `${r.id}.res`), 'utf8'));
-      assert.match(result, sequence === 1 ? /\nerror\n\d+\n3\nTIMEOUT\n$/ : /\nok\n\d+\n3\n2,1,3\n$/);
+      assertResponse(result, r, sequence === 1 ? 'error' : 'ok', sequence === 1 ? 'TIMEOUT' : '2,1,3');
       await waitFor(status, (s) => s.callsToday === sequence && s.requestState === null);
     }
     assert.equal(calls, 2, 'timeout must not retry the first provider request');
@@ -604,13 +612,12 @@ test('a stalled response body reports timeout, recovers, and still rejects malfo
     bridge = await startBridge({ root, debounceMs: 0, timeoutMs: 400, cacheTtlMs: 0,
       provider: { endpoint: `http://127.0.0.1:${server.address().port}/v1/systemone`, auth: 'none' } });
     const status = () => fs.readFile(path.join(root, 'status.json'), 'utf8').then(JSON.parse);
-    const expected = [/\nerror\n\d+\n3\nTIMEOUT\n$/, /\nok\n\d+\n3\n2,1,3\n$/,
-      /\nerror\n\d+\n3\nINVALID_PROVIDER_RESPONSE\n$/];
+    const expected = [['error', 'TIMEOUT'], ['ok', '2,1,3'], ['error', 'INVALID_PROVIDER_RESPONSE']];
     for (const sequence of [1, 2, 3]) {
       const r = { ...request(), id: `body_${sequence}`, sequence, instance: bridge.instance, token: bridge.token };
       await atomicWrite(path.join(bridge.runtime, 'inbox', `${r.id}.json`), JSON.stringify(r));
       const result = await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', `${r.id}.res`), 'utf8'));
-      assert.match(result, expected[sequence - 1]);
+      assertResponse(result, r, ...expected[sequence - 1]);
       await waitFor(status, (s) => s.callsToday === sequence && s.requestState === null);
     }
     assert.equal(calls, 3, 'body timeout and malformed JSON must not cause retries');
@@ -650,7 +657,7 @@ test('cancelling an active response retires it promptly without publishing a sta
     const next = { ...r, id: 'cancel_2', sequence: 2 };
     await atomicWrite(path.join(bridge.runtime, 'inbox', `${next.id}.json`), JSON.stringify(next));
     const result = await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', `${next.id}.res`), 'utf8'));
-    assert.match(result, /\nok\n\d+\n3\n2,1,3\n$/);
+    assertResponse(result, next, 'ok', '2,1,3');
     assert.equal(calls, 2);
   } finally {
     if (bridge) await bridge.stop();
@@ -671,7 +678,7 @@ test('parent hard deadline releases abort-ignoring fetch, body and blocked worke
         const r = { ...request(), id: `hard_${sequence}`, sequence, instance: bridge.instance, token: bridge.token };
         await atomicWrite(path.join(bridge.runtime, 'inbox', `${r.id}.json`), JSON.stringify(r));
         const output = await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', `${r.id}.res`), 'utf8'));
-        assert.match(output, sequence === 1 ? /\nerror\n\d+\n3\nTIMEOUT\n$/ : /\nok\n\d+\n3\n2,1,3\n$/);
+        assertResponse(output, r, sequence === 1 ? 'error' : 'ok', sequence === 1 ? 'TIMEOUT' : '2,1,3');
         const idle = await waitFor(status, (s) => s.callsToday === sequence && s.requestState === null);
         assert.equal(idle.providerWorker.hardTimeouts, 1);
         assert.equal(idle.providerWorker.starts, sequence);
@@ -728,7 +735,7 @@ test('worker crashes and unexpected clean exits are contained and the next reque
         const r = { ...request(), id: `exit_${sequence}`, sequence, instance: bridge.instance, token: bridge.token };
         await atomicWrite(path.join(bridge.runtime, 'inbox', `${r.id}.json`), JSON.stringify(r));
         const output = await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', `${r.id}.res`), 'utf8'));
-        assert.match(output, sequence === 1 ? /\nPROVIDER_WORKER_FAILED\n$/ : /\nok\n/);
+        assertResponse(output, r, sequence === 1 ? 'error' : 'ok', sequence === 1 ? 'PROVIDER_WORKER_FAILED' : '2,1,3');
         const idle = await waitFor(status, (s) => s.callsToday === sequence && s.requestState === null);
         assert.equal(idle.providerWorker.failures, 1);
         assert.equal(idle.providerWorker.starts, sequence);
@@ -759,8 +766,8 @@ test('stopping a hung worker is prompt and restarting preserves its spent daily 
       workerUrl: uncooperativeWorker });
     const next = { ...request(), id: 'budget', instance: bridge.instance, token: bridge.token };
     await atomicWrite(path.join(bridge.runtime, 'inbox', `${next.id}.json`), JSON.stringify(next));
-    assert.match(await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', 'budget.res'), 'utf8')),
-      /\nDAILY_BUDGET_EXCEEDED\n$/);
+    assertResponse(await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', 'budget.res'), 'utf8')),
+      next, 'error', 'DAILY_BUDGET_EXCEEDED');
     assert.equal(local.calls(), 1, 'worker restart must not reset or bypass the parent budget');
   } finally { await bridge.stop(); }
 });
