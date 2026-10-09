@@ -5,7 +5,6 @@ param(
 $ErrorActionPreference = 'Stop'
 $receiptPath = (Resolve-Path -LiteralPath $Receipt).Path
 $receiptDir = Split-Path -Parent $receiptPath
-$r = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
 $resultPath = Join-Path $receiptDir 'switch-result.json'
 function Hash($path) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
 function Save-Result($phase, $message) {
@@ -14,13 +13,16 @@ function Save-Result($phase, $message) {
 }
 $changed = New-Object System.Collections.Generic.List[object]
 try {
+    # PowerShell 7 writes BOM-less UTF-8; Windows PowerShell otherwise assumes ANSI.
+    $r = Get-Content -LiteralPath $receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($r.format -ne 1) { throw 'Unsupported replacement receipt.' }
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Administrator authorization required.' }
     if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit PowerShell.' }
     $registered = (Get-Item -LiteralPath 'Registry::HKEY_CLASSES_ROOT\CLSID\{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}\InprocServer32').GetValue('')
     if ($registered -ne $r.registeredTsfDll) { throw 'Registered TSF path changed.' }
     if ((Hash (Join-Path $r.bundle 'manifest.json')) -ne $r.bundleManifestHash) { throw 'Bundle manifest changed.' }
-    $manifest = Get-Content -LiteralPath (Join-Path $r.bundle 'manifest.json') -Raw | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath (Join-Path $r.bundle 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $mapping = @{
         'WeaselServer.exe'='WeaselServer.exe'; 'weaselx64.dll'='weaselx64.dll'
         'registered-tsf-x64.dll'='weaselx64.dll'; 'jev_windows.lua'='lua/jev_windows.lua'
