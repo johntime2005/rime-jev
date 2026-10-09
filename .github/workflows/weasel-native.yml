@@ -26,7 +26,16 @@ jobs:
         shell: pwsh
         run: ./scripts/Build-Weasel.ps1
       - name: Unit tests
-        run: node --test tests/bridge.test.mjs tests/provider.test.mjs
+        run: node --test tests/bridge.test.mjs tests/provider.test.mjs tests/context-pebrel.test.mjs
+      - name: Packaging tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Stage matched bundle
+        run: python scripts/Package-Native.py --artifact . --output runtime/native-bundle --source-label "github:${{ github.repository }}/actions/runs/${{ github.run_id }}@${{ github.sha }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weasel-jev-x64-bundle
+          path: runtime/native-bundle/
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: weasel-jev-x64-experimental

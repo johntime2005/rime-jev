@@ -39,12 +39,45 @@ local function info(state)
   return { instance = instance, token = token, mode = mode }
 end
 
-local function cancel(state)
+local function context_diagnostic(state)
+  local snap = state.snapshot
+  return '{"enabled":' .. (state.use_context and 'true' or 'false') .. ',"reason":'
+    .. json(not state.use_context and 'disabled' or snap.context_target and 'context_pending'
+      or snap.context ~= '' and 'available' or state.history_reason or 'session_start')
+    .. ',"source":' .. json(snap.context_target and 'pebrel_codex' or snap.context ~= '' and 'history' or 'none') .. '}'
+end
+
+local function report_cancel(state, cause)
+  local p = state.pending
+  local path = state.dir .. '/outbox/' .. p.id .. '.cancel'
+  local f = io.open(path .. '.tmp', 'wb')
+  if not f then return end
+  -- Bounded, text-free receipt; failure must never prevent cancellation.
+  local written = f:write('{"protocol":1,"id":' .. json(p.id) .. ',"instance":' .. json(p.instance)
+    .. ',"token":' .. json(p.token) .. ',"reason":' .. json(cause) .. ',"createdAt":' .. os.time() .. '}')
+  local closed = f:close()
+  if not written or not closed or not os.rename(path .. '.tmp', path) then os.remove(path .. '.tmp') end
+end
+
+local function cancel(state, reason, cause)
+  local was_pending = state.pending ~= nil
+  reason = reason or 'cancelled'
   if state.pending then
     os.remove(state.dir .. '/inbox/' .. state.pending.id .. '.json')
     os.remove(state.dir .. '/outbox/' .. state.pending.id .. '.res')
+    if cause then pcall(report_cancel, state, cause) end
+    -- Change only our existing annotation, not the menu or its selected index.
+    -- Regenerating composition here could undo a manual selection or resubmit.
+    if state.displayed then
+      local ok = pcall(function()
+        local displayed = state.displayed
+        displayed.target.comment = displayed.target.comment:gsub('%[Jev: pending%]$', '[Jev: ' .. reason .. ']')
+      end)
+      if ok then state.ui_dirty = true end
+    end
   end
-  state.pending, state.applied, state.status = nil, nil, nil
+  state.pending, state.applied, state.receipt = nil, nil, nil
+  state.status = was_pending and reason or nil
 end
 
 local function acquire(env)
@@ -57,8 +90,8 @@ local function acquire(env)
     local dir = env.engine.schema.config:get_string('jev_windows/runtime_dir')
     if not dir or dir == '' then dir = (os.getenv('LOCALAPPDATA') or '') .. '/RimeJev/runtime' end
     local count = env.engine.schema.config:get_int('menu/page_size') or 7
-    states[id] = { id = id, refs = 0, serial = 0, history = '', history_at = 0,
-      dir = dir, count = math.max(2, math.min(count, 10)), enabled = false }
+    states[id] = { id = id, refs = 0, serial = 0, history = '', history_at = 0, history_reason = 'session_start',
+      dir = dir, count = math.max(2, math.min(count, 10)), enabled = false, cache_epoch = 0 }
   end
   env.state = states[id]
   env.state.refs = env.state.refs + 1
@@ -67,14 +100,17 @@ end
 local function release(env)
   if not env.state then return end
   env.state.refs = env.state.refs - 1
-  if env.state.refs == 0 then cancel(env.state); states[env.state.id] = nil end
+  if env.state.refs == 0 then cancel(env.state, nil, 'session_closed'); states[env.state.id] = nil end
   env.state = nil
 end
 
-local function clear(state)
-  cancel(state)
+local function clear(state, cause)
+  cause = cause or 'adapter_error'
+  cancel(state, nil, cause)
   state.history, state.history_at, state.snapshot = '', 0, nil
-  state.attempted, state.paused = nil, nil
+  state.history_reason = cause
+  state.cache_epoch = state.cache_epoch + 1
+  state.attempted, state.paused, state.context_suppressed = nil, nil, cause == 'manual_clear'
 end
 
 local function settings(state)
@@ -83,9 +119,11 @@ local function settings(state)
   if value then enabled, context = value:match('^JEVPREF1\n([01])\n([01])\n$') end
   -- Explicit local consent is required before ordinary typing can send text.
   local on = enabled == '1'
-  if state.enabled ~= on then clear(state); state.enabled = on end
-  state.use_context = context == '1'
-  if not state.use_context then state.history = '' end
+  if state.enabled ~= on then clear(state, 'auto_toggle'); state.enabled = on end
+  local use_context = context == '1'
+  if state.use_context ~= nil and state.use_context ~= use_context then clear(state, 'context_option_changed') end
+  state.use_context = use_context
+  if not state.use_context then state.history, state.history_reason = '', 'disabled' end
 end
 
 local function toggle(state)
@@ -125,17 +163,25 @@ local function prepare(buffer, env)
   if not state then return nil end
   settings(state)
   local app = ctx:get_property('client_app') .. ':' .. ctx:get_property('client_type')
-  if state.app and state.app ~= app then clear(state) end
+  if state.app and state.app ~= app then clear(state, 'app_changed') end
   state.app = app
-  if os.time() - state.history_at > 60 then state.history = '' end
+  if state.history ~= '' and os.time() - state.history_at > 60 then
+    state.history, state.history_reason = '', 'idle_timeout'
+  end
   local snap = { input = ctx.input, caret = ctx.caret_pos,
     preedit = buffer[1] and buffer[1].preedit or ctx.input, candidates = {} }
+  -- A terminal's IME history cannot describe edits or its current draft. The
+  -- background bridge reads only the verified Codex composer, never old history.
+  if state.use_context and not state.context_suppressed and ctx:get_property('client_app'):lower() == 'pebrel.exe' then
+    snap.context_target = 'pebrel'
+  end
+  snap.context = snap.context_target and '' or state.history
   for _, c in ipairs(buffer) do
     snap.candidates[#snap.candidates + 1] = { text = c.text, start = c.start, finish = c._end }
   end
-  snap.signature = signature(snap, state.history)
-  if state.snapshot and state.snapshot.signature ~= snap.signature then cancel(state) end
-  if state.applied and os.time() > state.applied.expires then cancel(state) end
+  snap.signature = signature(snap, snap.context) .. '|' .. (snap.context_target or '')
+  if state.snapshot and state.snapshot.signature ~= snap.signature then cancel(state, nil, 'snapshot_changed') end
+  if state.applied and os.time() > state.applied.expires then cancel(state, nil, 'expired') end
   state.snapshot = snap
   return state
 end
@@ -151,9 +197,10 @@ local function submit(state)
   for _, c in ipairs(snap.candidates) do
     candidates[#candidates + 1] = string.format('{"text":%s,"start":%d,"end":%d}', json(c.text), c.start, c.finish)
   end
-  local body = string.format('{"protocol":1,"id":%s,"instance":%s,"token":%s,"createdAt":%d,"session":%s,"sequence":%d,"pinyin":%s,"caret":%d,"preedit":%s,"context":%s,"candidates":[%s]}',
+  local body = string.format('{"protocol":1,"id":%s,"instance":%s,"token":%s,"createdAt":%d,"session":%s,"sequence":%d,"pinyin":%s,"caret":%d,"preedit":%s,"context":%s,"contextState":%s,"cacheEpoch":%d,"contextTarget":%s,"candidates":[%s]}',
     json(id), json(service.instance), json(service.token), os.time(), json(state.id), state.serial,
-    json(snap.input), snap.caret, json(snap.preedit), json(state.history), table.concat(candidates, ','))
+    json(snap.input), snap.caret, json(snap.preedit), json(snap.context), context_diagnostic(state), state.cache_epoch,
+    snap.context_target and json(snap.context_target) or 'null', table.concat(candidates, ','))
   if #body > 20000 then state.status = 'request too large'; return end
   local path = state.dir .. '/inbox/' .. id .. '.json'
   local f = io.open(path .. '.tmp', 'wb')
@@ -163,16 +210,16 @@ local function submit(state)
   if not written or not closed or not os.rename(path .. '.tmp', path) then
     os.remove(path .. '.tmp'); state.status = 'IPC error'; return
   end
-  state.pending = { id = id, instance = service.instance, signature = snap.signature, created = os.time() }
+  state.pending = { id = id, instance = service.instance, token = service.token, signature = snap.signature, created = os.time() }
   state.status = 'pending'
 end
 
-local function consume(state)
+local function consume(state, channel)
   local p = state.pending
   local service = info(state)
   if not service or service.instance ~= p.instance or os.time() - p.created > 12
     or os.time() < p.created or p.signature ~= state.snapshot.signature then
-    cancel(state); state.status = 'expired'; return
+    cancel(state, nil, 'expired'); state.status = 'expired'; return
   end
   local raw = read(state.dir .. '/outbox/' .. p.id .. '.res', 4096)
   if not raw then state.status = 'pending'; return end
@@ -194,46 +241,75 @@ local function consume(state)
   end
   cancel(state)
   if not valid then state.status = 'invalid result'
-  elseif rows[4] == 'ok' then state.applied = { order = order, expires = expires }; state.status = 'ranked'
+  elseif rows[4] == 'ok' then
+    state.applied = { order = order, expires = expires }
+    state.status = order[1] == 1 and 'same first' or ('ranked #' .. order[1] .. '->1')
   elseif rows[4] == 'abstain' then state.status = 'keep original'
   else state.status = rows[7]:match('^[A-Z_]+$') and rows[7] or 'service error' end
+  if valid then state.receipt = { id = p.id, instance = p.instance, channel = channel or 'filter' } end
+end
+
+local function acknowledge(state)
+  local receipt = state.receipt
+  if not receipt then return end
+  state.receipt = nil
+  local path = state.dir .. '/outbox/' .. receipt.id .. '.ack'
+  local f = io.open(path .. '.tmp', 'wb')
+  if not f then return end
+  -- No input text: this confirms filter regeneration, not a screen-rendering test.
+  local written = f:write('{"protocol":1,"id":' .. json(receipt.id) .. ',"instance":' .. json(receipt.instance)
+    .. ',"channel":' .. json(receipt.channel) .. '}')
+  local closed = f:close()
+  if not written or not closed or not os.rename(path .. '.tmp', path) then os.remove(path .. '.tmp') end
 end
 
 function M.processor.init(env)
   acquire(env)
   local state, ctx = env.state, env.engine.context
   env.commit = ctx.commit_notifier:connect(function(c)
-    cancel(state)
+    cancel(state, nil, 'committed')
     local text = c:get_commit_text() or ''
-    if not state.use_context or text:find('[\r\n]') then state.history = ''
+    if not state.use_context then state.history, state.history_reason = '', 'disabled'
+    elseif text:find('[\r\n]') then state.history, state.history_reason = '', 'newline'
     else
       if os.time() - state.history_at > 60 then state.history = '' end
       state.history = tail(state.history .. text, 80)
     end
     state.history_at, state.snapshot = os.time(), nil
-    state.attempted, state.paused = nil, nil
+    state.attempted, state.paused, state.context_suppressed = nil, nil, nil
   end)
   env.update = ctx.update_notifier:connect(function(c)
     if state.snapshot and (c.input ~= state.snapshot.input or c.caret_pos ~= state.snapshot.caret) then
-      cancel(state); state.snapshot = nil
+      cancel(state, nil, c.input ~= state.snapshot.input and 'input_changed' or 'caret_changed'); state.snapshot = nil
     end
   end)
   env.option = ctx.option_update_notifier:connect(function(_, name)
-    if name == 'ascii_mode' then clear(state) end
+    if name == 'ascii_mode' then clear(state, 'ascii_mode') end
   end)
   env.property = ctx.property_update_notifier:connect(function(c, name)
     if name == 'jev_focus_epoch' then
-      clear(state)
+      clear(state, 'focus_changed')
+      state.paused = c.input
     elseif name == 'jev_manual_selection' then
-      cancel(state)
+      cancel(state, 'paused', 'manual_selection')
       state.paused = c.input
     elseif name == 'jev_refresh' then
       local success = pcall(function()
+        local was_pending = state.pending ~= nil
         settings(state)
-        if state.enabled and state.pending and state.snapshot and not state.paused
+        -- A configuration-tool disable must also retire the frontend's pending UI.
+        if was_pending and not state.enabled then
+          refresh(c)
+          c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
+        elseif state.ui_dirty and not state.pending then
+          -- Ask the native frontend to retire its stale pending UI without
+          -- refreshing composition or allowing a cancelled result to apply.
+          state.ui_dirty = nil
+          c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
+        elseif state.enabled and state.pending and state.snapshot and not state.paused
           and not c:get_option('ascii_mode') and first_page(c)
           and c.input == state.snapshot.input and c.caret_pos == state.snapshot.caret then
-          consume(state)
+          consume(state, 'native')
           if not state.pending then
             refresh(c)
             c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
@@ -257,14 +333,21 @@ local function process(key, env)
   if not state or key:release() then return NOOP end
   settings(state)
   local code = key.keycode
+  -- Modifier presses precede shortcut keys. They do not edit the composition;
+  -- cancelling here would discard the result before Ctrl+Alt+F8 can read it.
+  if code >= 65505 and code <= 65514 then return NOOP end
   if code == F8 and key:ctrl() and not key:alt() and not key:super() and not key:shift() then
-    clear(state)
+    clear(state, 'manual_clear')
     if ctx:is_composing() then refresh(ctx) end
     return ACCEPTED
   end
   -- Explicit diagnostic refresh, not a synthetic/background keyboard event.
   if code == F8 and key:ctrl() and key:alt() and not key:super() and not key:shift() then
-    if ctx:is_composing() and first_page(ctx) then refresh(ctx) end
+    if ctx:is_composing() and first_page(ctx) then
+      state.consume_channel = 'diagnostic'
+      refresh(ctx)
+      state.consume_channel = nil
+    end
     return ACCEPTED
   end
   if code == F8 and not key:ctrl() and not key:alt() and not key:super() and not key:shift()
@@ -274,10 +357,12 @@ local function process(key, env)
     return ACCEPTED
   end
   -- Invalidate before navigation, so an old response cannot replace a manual choice.
-  if code == 65307 or code == 65293 or key:super() or key:ctrl() or key:alt() then clear(state)
-  elseif not ctx:is_composing() and (code == 65288 or code == 65535 or (code >= 65360 and code <= 65367)) then clear(state)
+  if code == 65307 then clear(state, 'escape')
+  elseif code == 65293 then clear(state, 'enter')
+  elseif key:super() or key:ctrl() or key:alt() then clear(state, 'shortcut')
+  elseif not ctx:is_composing() and (code == 65288 or code == 65535 or (code >= 65360 and code <= 65367)) then clear(state, 'editing')
   elseif (code >= 65360 and code <= 65367) or code == 45 or code == 61 or code == 65289 then
-    cancel(state); state.paused = ctx.input
+    cancel(state, 'paused', 'navigation'); state.paused = ctx.input
   end
   -- Never apply a newly arrived response on Space, number selection or Enter.
   -- The displayed candidate, not an unseen replacement, must be committed.
@@ -310,13 +395,13 @@ function M.filter.func(input, env)
       and #snap.candidates >= 2 and #snap.input <= 80 and snap.input:match("^[a-z ']+$")
       and snap.caret == #snap.input then
       local handled = pcall(function()
-        if state.pending then consume(state)
+        if state.pending then consume(state, state.consume_channel)
         elseif not state.applied and state.attempted ~= snap.signature then
           state.attempted = snap.signature
           submit(state)
         end
       end)
-      if not handled then cancel(state); state.status = 'unavailable' end
+      if not handled then cancel(state, nil, 'adapter_error'); state.status = 'unavailable' end
     end
   end
   local order = state and state.applied and state.applied.order or nil
@@ -324,8 +409,23 @@ function M.filter.func(input, env)
     local c = buffer[order and order[position] or position]
     if position == 1 and state then
       local status = not state.enabled and 'off' or state.status or 'on'
-      local made, shadow = pcall(ShadowCandidate, c, c.type, c.text, (c.comment or '') .. ' [Jev: ' .. status .. ']')
-      if made then c = shadow end
+      local comment = (c.comment or ''):gsub(' %[%s*Jev: [^%]]*%]$', '') .. ' [Jev: ' .. status .. ']'
+      -- Simple/Phrase comments are mutable, unlike ShadowCandidate comments.
+      -- Retain the genuine candidate so cancellation can retire only the label.
+      local made, target = pcall(function()
+        local target = c:get_genuine()
+        local original = target.comment
+        target.comment = comment
+        if c.comment ~= comment then target.comment = original; return nil end
+        return target
+      end)
+      state.displayed = made and target and { target = target } or nil
+      if not state.displayed then
+        local shadow_ok, shadow = pcall(ShadowCandidate, c, c.type, c.text, comment)
+        if shadow_ok then c = shadow end
+      end
+      state.ui_dirty = nil
+      pcall(acknowledge, state)
     end
     yield(c)
   end

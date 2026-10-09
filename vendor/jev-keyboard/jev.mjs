@@ -179,8 +179,8 @@ export class JevClient {
       };
     } catch (error) {
       if (signal?.aborted) throw new AppError('输入已变化，请求已取消。', 'CANCELLED', 499);
-      if (error instanceof AppError) throw error;
       if (controller.signal.aborted) throw new AppError('Jev 请求超时；服务商可能已处理请求，未自动重试。', 'TIMEOUT', 504);
+      if (error instanceof AppError) throw error;
       throw new AppError('无法连接官方 Jev API；已停止，不回退到其他域名。', 'NETWORK_ERROR', 502);
     } finally {
       clearTimeout(timer);

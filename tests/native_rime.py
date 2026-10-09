@@ -3,6 +3,9 @@
 Never opens the real user database and never calls a network provider.
 """
 import ctypes as C
+import argparse
+import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -43,7 +46,7 @@ class Commit(C.Structure):
     _fields_ = [('data_size', C.c_int), ('text', C.c_char_p)]
 
 
-def run():
+def run(typing_profile=False, nasal_profile=False, pebrel_context=False):
     project = Path(__file__).resolve().parents[1]
     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\WOW6432Node\Rime\Weasel') as k:
         install = Path(winreg.QueryValueEx(k, 'WeaselRoot')[0])
@@ -53,15 +56,24 @@ def run():
     data.mkdir(parents=True)
     (data / 'lua').mkdir()
     shutil.copytree(user / 'build', data / 'build')
+    stock_prism_hash = hashlib.sha256((data / 'build/rime_ice.prism.bin').read_bytes()).hexdigest()
     shutil.copy2(project / 'lua/jev_windows.lua', data / 'lua/jev_windows.lua')
     schema = (project / 'rime_ice_jev.schema.yaml').read_text()
-    schema += '\n  jev_windows/runtime_dir: ' + json.dumps((bridge_root / 'runtime').as_posix()) + '\n'
+    schema += '\n  - jev_windows/runtime_dir: ' + json.dumps((bridge_root / 'runtime').as_posix()) + '\n'
     (data / 'rime_ice_jev.schema.yaml').write_text(schema)
+    if typing_profile or nasal_profile:
+        spec = importlib.util.spec_from_file_location('typing_profile', project / 'scripts/Typing-Profile.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        pairs = module.NASAL_PAIRS if nasal_profile else ['z-zh', 'in-ing']
+        (data / 'rime_ice_jev.custom.yaml').write_text(module.profile(pairs), encoding='ascii')
+        (data / 'custom_phrase.txt').write_text('\u5feb\u6377\u77ed\u8bed\u6d4b\u8bd5\tjvcs\t100\n', encoding='utf-8')
     existing_default = (user / 'default.custom.yaml').read_text(encoding='utf-8-sig')
     if 'rime_ice_jev' not in existing_default:
         existing_default = existing_default.rstrip() + '\n  "schema_list/+":\n    - {schema: rime_ice_jev}\n'
     (data / 'default.custom.yaml').write_text(existing_default, encoding='utf-8')
-    node_script = f"import {{startBridge}} from {json.dumps((project / 'bridge.mjs').as_uri())}; const b=await startBridge({{root:{json.dumps(str(bridge_root))},mock:true}}); await b.done;"
+    context_options = ',contextProvider:' + json.dumps({'type': 'pebrel-codex', 'cli': os.environ['PEBREL_CLI']}) if pebrel_context else ''
+    node_script = f"import {{startBridge}} from {json.dumps((project / 'bridge.mjs').as_uri())}; const b=await startBridge({{root:{json.dumps(str(bridge_root))},mock:true{context_options}}}); await b.done;"
     child = subprocess.Popen(['node', '--input-type=module', '-e', node_script],
                              creationflags=subprocess.CREATE_NO_WINDOW,
                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -99,6 +111,8 @@ def run():
         compiled_default = (data / 'build/default.yaml').read_text(encoding='utf-8')
         assert 'schema: rime_ice\n' in compiled_default and 'schema: rime_ice_jev\n' in compiled_default
         assert deploy_schema(str(data / 'rime_ice_jev.schema.yaml').encode()), 'schema did not compile'
+        assert hashlib.sha256((data / 'build/rime_ice.prism.bin').read_bytes()).hexdigest() == stock_prism_hash
+        assert (data / 'build/rime_ice_jev.prism.bin').exists(), 'Jev must use its own spelling index'
         initialize(C.byref(traits)); initialized = True
         sid = create()
         assert sid and select(sid, b'rime_ice_jev'), 'schema not selectable'
@@ -108,13 +122,79 @@ def run():
             ctx = Context(); ctx.data_size = C.sizeof(Context) - C.sizeof(C.c_int)
             assert get_context(sid, C.byref(ctx))
             try:
-                return {'page': ctx.menu.page_no, 'items': [
+                return {'page': ctx.menu.page_no, 'selected': ctx.menu.highlighted_candidate_index, 'items': [
                     ((ctx.menu.candidates[i].text or b'').decode(), (ctx.menu.candidates[i].comment or b'').decode())
                     for i in range(ctx.menu.num_candidates)]}
             finally: free_context(C.byref(ctx))
         for _ in range(50):
             if (bridge_root / 'runtime/bridge.info').exists(): break
             time.sleep(.1)
+        if pebrel_context:
+            # The caller puts a known, unsubmitted draft in the focused Codex
+            # composer. This test never types, submits, or calls a real provider.
+            (bridge_root / 'runtime/preferences').write_text('JEVPREF1\n1\n1\n', encoding='ascii', newline='\n')
+            set_property(sid, b'client_app', b'pebrel.exe')
+            set_property(sid, b'client_type', b'tsf')
+            time.sleep(.3)
+            for letter in 'jingli': key(letter)
+            original = menu()
+            for _ in range(350):
+                try:
+                    status = json.loads((bridge_root / 'status.json').read_text(encoding='utf-8'))
+                except (PermissionError, FileNotFoundError):
+                    time.sleep(.02)
+                    continue
+                if status.get('lastResult'): break
+                time.sleep(.02)
+            result = status['lastResult']
+            assert result['contextState'] == {'enabled': True, 'reason': 'available', 'source': 'pebrel_codex'}, result
+            assert result['contextChars'] == 13, ('unexpected synthetic draft length', result)
+            assert result['decision'] == 'promoted' and result['source'] == 'mock', result
+            assert status['callsToday'] == 0
+            set_property(sid, b'jev_refresh', b'pebrel-context-test')
+            updated = menu()
+            assert updated['items'][0][0] == original['items'][1][0], 'mock ranking did not reach Lua'
+            print(json.dumps({'pebrel_context': 'PASS', 'contextChars': result['contextChars'],
+                'readyMs': result['readyMs'], 'source': result['contextState']['source'],
+                'lua_request_and_mock_rank_applied': True, 'provider_calls': 0,
+                'gui_timer_tested': False, 'root': str(root)}, indent=2))
+            return
+        if typing_profile or nasal_profile:
+            compiled = (data / 'build/rime_ice_jev.schema.yaml').read_text(encoding='utf-8')
+            assert 'abbrev/^([a-z]).+$/$1/' in compiled
+            checks = [
+                ('zg', '\u4e2d\u56fd'), ('zhongg', '\u4e2d\u56fd'),
+                ('beijin', '\u5317\u4eac'),
+                ('jvcs', '\u5feb\u6377\u77ed\u8bed\u6d4b\u8bd5'),
+            ]
+            if nasal_profile:
+                for rule in [rule for pair in pairs for rule in module.FUZZY[pair]]:
+                    assert rule in compiled, ('missing nasal rule', rule)
+                for rule in ['derive/^zh/z/', 'derive/^n/l/', 'derive/^f/h/', 'derive/^r/l/']:
+                    assert rule not in compiled, ('unexpected fuzzy initial', rule)
+                checks += [
+                    ('banzhu', '\u5e2e\u52a9'), ('bangfa', '\u529e\u6cd5'),
+                    ('shenming', '\u751f\u547d'), ('rengmin', '\u4eba\u6c11'),
+                    ('xingwen', '\u65b0\u95fb'), ('xianfa', '\u60f3\u6cd5'),
+                    ('dianghua', '\u7535\u8bdd'), ('guanbo', '\u5e7f\u64ad'),
+                    ('guangbi', '\u5173\u95ed'), ('beijing', '\u5317\u4eac'),
+                ]
+            else:
+                assert 'derive/^zh/z/' in compiled
+                checks.append(('zongguo', '\u4e2d\u56fd'))
+            local_ms = []
+            for spelling, expected in checks:
+                started = time.perf_counter()
+                for letter in spelling: key(letter)
+                visible = menu()
+                local_ms.append(round((time.perf_counter() - started) * 1000, 2))
+                assert expected in [item[0] for item in visible['items']], (spelling, expected, visible)
+                key(65307)
+            assert not list((bridge_root / 'runtime/inbox').glob('*.json')), 'local adaptation must work offline'
+            print(json.dumps({'typing_profile': 'PASS', 'fuzzy_pairs': pairs,
+                'nasal_only': nasal_profile, 'local_candidate_cases': [spelling for spelling, _ in checks],
+                'abbreviation_and_mixed_spelling': True, 'custom_phrase': True,
+                'original_prism_unchanged': True, 'local_candidate_ms': local_ms, 'gui_tested': False}))
         for letter in 'jingli': key(letter)
         original = menu()
         assert len(original['items']) == 7, original
@@ -133,6 +213,76 @@ def run():
         assert get_commit(sid, C.byref(commit))
         assert commit.text.decode() == original['items'][0][0]
         free_commit(C.byref(commit))
+        # Context-enabled production behavior was not covered by the original
+        # mock tests. Check the actual request before the mock consumes it.
+        (bridge_root / 'runtime/preferences').write_text('JEVPREF1\n1\n1\n', encoding='ascii', newline='\n')
+        key(65477, 4)
+        committed_prefix = ''
+        for letters in ['tabei', 'renming', 'wei', 'bumen']:
+            for letter in letters: key(letter)
+            key(' ')
+            commit = Commit(); commit.data_size = C.sizeof(Commit) - C.sizeof(C.c_int)
+            assert get_commit(sid, C.byref(commit)), ('missing prefix commit', letters)
+            committed_prefix += commit.text.decode()
+            free_commit(C.byref(commit))
+        for letter in 'jingli': key(letter)
+        requests = list((bridge_root / 'runtime/inbox').glob('*.json'))
+        assert len(requests) == 1, ('missing context request', len(requests), menu())
+        submitted = json.loads(requests[0].read_text(encoding='utf-8'))
+        assert submitted['context'] == committed_prefix, ('committed context missing', len(submitted['context']), len(committed_prefix))
+        assert submitted['pinyin'] == 'jingli'
+        assert submitted['contextState'] == {'enabled': True, 'reason': 'available', 'source': 'history'}
+        prior_epoch = submitted['cacheEpoch']
+        set_property(sid, b'jev_focus_epoch', b'context-focus-left')
+        for _ in range(100):
+            try:
+                status = json.loads((bridge_root / 'status.json').read_text(encoding='utf-8'))
+            except PermissionError:
+                time.sleep(.02)
+                continue
+            if status.get('lastAdapterCancellation', {}).get('requestId') == submitted['id']: break
+            time.sleep(.02)
+        assert status['lastAdapterCancellation']['reason'] == 'focus_changed', status
+        # Resume typing after focus invalidation, without restoring old history.
+        key('a')
+        requests = list((bridge_root / 'runtime/inbox').glob('*.json'))
+        assert len(requests) == 1
+        resumed = json.loads(requests[0].read_text(encoding='utf-8'))
+        assert resumed['context'] == ''
+        assert resumed['contextState'] == {'enabled': True, 'reason': 'focus_changed', 'source': 'none'}
+        assert resumed['cacheEpoch'] > prior_epoch
+        key(65307)
+        # Pebrel is a terminal, not an editable document. Its Codex draft is
+        # acquired by the bridge; IME commit history must not masquerade as it.
+        set_property(sid, b'client_app', b'pebrel.exe')
+        set_property(sid, b'client_type', b'tsf')
+        for letter in 'jingli': key(letter)
+        requests = list((bridge_root / 'runtime/inbox').glob('*.json'))
+        assert len(requests) == 1
+        terminal = json.loads(requests[0].read_text(encoding='utf-8'))
+        assert terminal['context'] == '' and terminal['contextTarget'] == 'pebrel'
+        assert terminal['contextState'] == {'enabled': True, 'reason': 'context_pending', 'source': 'pebrel_codex'}
+        key(65477, 4)  # Manual clear suppresses external rereading for this composition.
+        requests = list((bridge_root / 'runtime/inbox').glob('*.json'))
+        assert len(requests) == 1
+        suppressed = json.loads(requests[0].read_text(encoding='utf-8'))
+        assert suppressed['context'] == '' and suppressed['contextTarget'] is None
+        assert suppressed['contextState'] == {'enabled': True, 'reason': 'manual_clear', 'source': 'none'}
+        key(65307)
+        set_property(sid, b'client_app', b'jev-test.exe')
+        (bridge_root / 'runtime/preferences').write_text('JEVPREF1\n1\n0\n', encoding='ascii', newline='\n')
+        time.sleep(1.05)
+        for letter in 'jingli': key(letter)
+        for _ in range(70):
+            if list((bridge_root / 'runtime/outbox').glob('*.res')): break
+            time.sleep(.05)
+        # Real shortcuts deliver modifier key-down events before F8.
+        key(65507, 4)  # Control_L
+        key(65513, 12)  # Alt_L with Control
+        key(65477, 12)
+        diagnostic = menu()
+        assert 'ranked' in diagnostic['items'][0][1], ('modifier shortcut lost result', diagnostic)
+        key(65307)
         time.sleep(1.05)
         for letter in 'jingli': key(letter)
         for _ in range(70):
@@ -144,19 +294,99 @@ def run():
         assert get_property(sid, b'jev_refresh_ack', ack, len(ack)) and ack.value == b'test-1'
         ranked = menu()
         assert ranked['items'][0][0] == original['items'][1][0], (original, ranked)
-        assert 'ranked' in ranked['items'][0][1], ranked
+        assert 'ranked #2->1' in ranked['items'][0][1], ranked
+        for _ in range(100):
+            try:
+                status = json.loads((bridge_root / 'status.json').read_text(encoding='utf-8'))
+            except PermissionError:
+                time.sleep(.02)
+                continue
+            if status.get('lastResult', {}).get('applyChannel') == 'native': break
+            time.sleep(.02)
+        assert status['lastResult']['applyChannel'] == 'native', status
+        assert status['outcomes']['nativeApplied'] >= 1, status
+        assert status['lastResult']['applyMs'] >= 0, status
         expected_commit = ranked['items'][0][0]
         key(' ')
         commit = Commit(); commit.data_size = C.sizeof(Commit) - C.sizeof(C.c_int)
         assert get_commit(sid, C.byref(commit))
         assert commit.text.decode() == expected_commit
         free_commit(C.byref(commit))
+        # A confident identity order is not a candidate replacement.
+        for letter in 'jingli': key(letter)
+        for _ in range(70):
+            results = list((bridge_root / 'runtime/outbox').glob('*.res'))
+            if results: break
+            time.sleep(.05)
+        assert results, 'mock result missing for identity-order regression'
+        rows = results[0].read_text().splitlines()
+        rows[6] = ','.join(str(i + 1) for i in range(int(rows[5])))
+        results[0].write_text('\n'.join(rows) + '\n', encoding='ascii', newline='\n')
+        before_identity = menu()['items'][0][0]
+        set_property(sid, b'jev_refresh', b'identity-order')
+        identity = menu()
+        assert identity['items'][0][0] == before_identity
+        assert 'same first' in identity['items'][0][1] and 'ranked' not in identity['items'][0][1], identity
+        key(65307)
         time.sleep(1.05)
         for letter in 'jingli': key(letter)
+        before_focus = menu()
         set_property(sid, b'jev_focus_epoch', b'focus-left')
         assert not list((bridge_root / 'runtime/inbox').glob('*.json')), 'focus must cancel pending input'
+        after_focus = menu()
+        assert [item[0] for item in after_focus['items']] == [item[0] for item in before_focus['items']]
+        assert 'pending' not in after_focus['items'][0][1], ('cancelled focus left a pending annotation', after_focus)
         set_property(sid, b'jev_refresh', b'focus-stale')
-        assert get_property(sid, b'jev_refresh_ack', ack, len(ack)) and ack.value != b'focus-stale'
+        assert get_property(sid, b'jev_refresh_ack', ack, len(ack)) and ack.value == b'focus-stale'
+        assert not list((bridge_root / 'runtime/inbox').glob('*.json')), 'retiring pending UI must not resubmit after focus loss'
+        key(65307)
+        # External configuration changes must update pending UI without a key.
+        for letter in 'jingli': key(letter)
+        assert 'pending' in menu()['items'][0][1], menu()
+        (bridge_root / 'runtime/preferences').write_text('JEVPREF1\n0\n0\n', encoding='ascii')
+        set_property(sid, b'jev_refresh', b'external-disable')
+        assert get_property(sid, b'jev_refresh_ack', ack, len(ack)) and ack.value == b'external-disable'
+        assert '[Jev: off]' in menu()['items'][0][1], menu()
+        assert not list((bridge_root / 'runtime/inbox').glob('*.json'))
+        key(65307)
+        key(65477)  # Re-enable for the manual-selection regression.
+        for letter in 'jingli': key(letter)
+        before_manual = menu()
+        set_property(sid, b'jev_manual_selection', b'mouse-hover')
+        assert not list((bridge_root / 'runtime/inbox').glob('*.json'))
+        set_property(sid, b'jev_refresh', b'manual-stale')
+        assert get_property(sid, b'jev_refresh_ack', ack, len(ack)) and ack.value == b'manual-stale'
+        after_manual = menu()
+        assert [item[0] for item in after_manual['items']] == [item[0] for item in before_manual['items']], 'manual selection must freeze displayed order'
+        assert after_manual['selected'] == before_manual['selected']
+        assert 'paused' in after_manual['items'][0][1] and 'pending' not in after_manual['items'][0][1], after_manual
+        assert not list((bridge_root / 'runtime/inbox').glob('*.json')), 'manual selection must not resubmit'
+        # Keyboard navigation must retire pending without resetting the highlight.
+        key(65307)
+        for letter in 'jingli': key(letter)
+        before_navigation = menu()
+        key(65364)  # Down
+        after_navigation = menu()
+        assert after_navigation['selected'] == 1, after_navigation
+        assert [item[0] for item in after_navigation['items']] == [item[0] for item in before_navigation['items']]
+        assert 'paused' in after_navigation['items'][0][1], after_navigation
+        assert not list((bridge_root / 'runtime/inbox').glob('*.json'))
+        # A terminal provider error must replace pending, without changing any words.
+        key(65307)
+        for letter in 'jingli': key(letter)
+        for _ in range(70):
+            results = list((bridge_root / 'runtime/outbox').glob('*.res'))
+            if results: break
+            time.sleep(.05)
+        assert results, 'mock result missing for timeout UI regression'
+        rows = results[0].read_text().splitlines()
+        rows[3], rows[6] = 'error', 'TIMEOUT'
+        results[0].write_text('\n'.join(rows) + '\n', encoding='ascii', newline='\n')
+        before_timeout = menu()
+        set_property(sid, b'jev_refresh', b'timeout-result')
+        after_timeout = menu()
+        assert 'TIMEOUT' in after_timeout['items'][0][1] and 'pending' not in after_timeout['items'][0][1], after_timeout
+        assert [item[0] for item in after_timeout['items']] == [item[0] for item in before_timeout['items']]
         key(65307)
         key(65477)  # Persistent disable.
         assert (bridge_root / 'runtime/preferences').read_text().splitlines()[1] == '0'
@@ -180,27 +410,55 @@ def run():
         assert not list((bridge_root / 'runtime/inbox').glob('*.json'))
         assert 'ranked' not in menu()['items'][0][1]
         key(65477, 4)  # Ctrl+F8 clears context without affecting the input.
-        # A stopped service must not prevent native candidate generation.
-        child.terminate(); child.wait(timeout=5)
-        (bridge_root / 'runtime/bridge.info').unlink(missing_ok=True)
+        # A bridge disappearing during a request must also retire pending.
         key(65307)
         for letter in 'jingli': key(letter)
         key(65477)
+        before_stop = menu()
+        assert 'pending' in before_stop['items'][0][1], before_stop
+        # A stopped service must not prevent native candidate generation.
+        child.terminate(); child.wait(timeout=5)
+        (bridge_root / 'runtime/bridge.info').unlink(missing_ok=True)
+        set_property(sid, b'jev_refresh', b'service-stopped')
+        assert get_property(sid, b'jev_refresh_ack', ack, len(ack)) and ack.value == b'service-stopped'
+        after_stop = menu()
+        assert 'expired' in after_stop['items'][0][1] and 'pending' not in after_stop['items'][0][1], after_stop
+        assert [item[0] for item in after_stop['items']] == [item[0] for item in before_stop['items']]
+        assert not list((bridge_root / 'runtime/inbox').glob('*.json'))
+        key(65307)
+        for letter in 'jingli': key(letter)
         fallback = menu()
         assert len(fallback['items']) == 7 and 'start service' in fallback['items'][0][1]
         print(json.dumps({'native_rime': 'PASS', 'schema': 'rime_ice_jev',
             'disabled_network_requests': 0, 'enabled_auto_request': True, 'mock_winner_promoted': True,
             'persistent_toggle': True, 'no_unseen_swap_on_space': True, 'property_refresh': True,
             'focus_invalidates_pending': True, 'gui_timer_tested': False,
+            'native_receipt_observed': True, 'identity_order_not_reported_as_ranked': True,
+            'committed_context_sent': True,
+            'pebrel_context_request_without_history': True,
+            'manual_clear_suppresses_document_context': True,
+            'context_clear_reason_and_cancel_receipt': True,
+            'cancelled_pending_annotation_retired': True,
+            'navigation_selection_preserved': True, 'timeout_annotation_retired': True,
+            'external_disable_refresh': True, 'manual_selection_invalidates_pending': True,
             'three_pages_preserved': True, 'stale_request_cancelled': True,
             'displayed_winner_committed': True,
+            'service_stopped_pending_retired': True,
             'service_stopped_fallback': True, 'original_schema_preserved': True,
             'f8_toggle_ms': round(elapsed * 1000, 2), 'root': str(root)}, indent=2))
     finally:
         if initialized: finalize()
+        if child.poll() not in (None, 0):
+            print(child.stderr.read().decode('utf-8', errors='replace'))
         child.terminate()
         child.wait(timeout=5)
 
 
 if __name__ == '__main__':
-    run()
+    parser = argparse.ArgumentParser()
+    profiles = parser.add_mutually_exclusive_group()
+    profiles.add_argument('--typing-profile', action='store_true')
+    profiles.add_argument('--nasal-profile', action='store_true')
+    profiles.add_argument('--pebrel-context', action='store_true')
+    args = parser.parse_args()
+    run(args.typing_profile, args.nasal_profile, args.pebrel_context)
