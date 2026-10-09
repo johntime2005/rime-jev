@@ -2,6 +2,50 @@
 
 Last checked: 2026-10-09.
 
+## Installed continuation and browser-context gap
+
+Native installation completed at 17:07 local, followed by the Lua-only
+`bbadb1a` update at 17:40. The native installer failure preceding the successful
+attempt was BOM-less UTF-8 JSON read as ANSI by Windows PowerShell, not proof
+that the second UAC prompt had been cancelled. The launcher now uses explicit
+UTF-8 and avoids inherited PowerShell 7 module paths; failure receipts cover
+JSON parse errors and the parent reports the helper exit code. Two new tests
+run the failure path with a Chinese UTF-8 fixture and malformed JSON, without
+UAC or system edits. All 11 Python unit tests pass.
+
+The user's pending report correlated with hundreds of `document_changed`
+cancellations and no result publication, not a stuck provider. The Lua fix
+withholds frontend acknowledgment when capture merely regenerates the same
+pending menu. This avoids a redundant full native preedit write while still
+canceling stale document stamps. The added isolated-librime regression failed
+before the change and passes after it, including a second stamp with unchanged
+text, old-result rejection and eventual displayed-word commit. All 56 Node
+tests and ordinary/context/nasal librime modes pass. The native manager's no-op
+async probe did not reproduce a self-notification, so a general claim that
+`InWriteSession` misidentifies own edits is not established and that native
+check was not relaxed. The controlled probe left no source change.
+
+After deployment, the ordinary bridge observed three native application
+acknowledgments (one same-first decision, two abstentions). The user then
+supplied a browser screenshot with an incorrect rank-1 selection for the
+company-manager sentence. The compiled TSF app allowlist is empty, so that
+browser does not supply document text even though the context preference is on.
+The latest status at inspection belonged to a later Pebrel focus-change
+abstention; it is not the exact ranking record for the screenshot.
+
+Two explicitly announced synthetic calls used the screenshot's candidate
+order and the existing provider/prompt, without reading another application's
+text. Empty context returned `1,2,3,4,5,6,7`, top probability 0.60; the supplied
+seven-character prefix returned `5,1,2,3,4,6,7`, top probability 1.00. Provider
+times were 1121/474ms and ready times 1237/586ms. Raw numeric-only results are in
+`runtime/jingli-browser-context-check-20261009.json`; this is a two-sample
+contrast, not an accuracy or GUI-latency benchmark. No threshold was lowered
+and no browser was allowlisted. Actual browser-control context capture remains
+an open integration/acceptance requirement.
+
+Current hashes and backups are in `REPLACEMENT.md`. Earlier cancelled-attempt
+notes below are historical, not current installation status.
+
 ## Integrated context and cancellation continuation
 
 Integrated `feat/tsf-surrounding-context` at `aaf1cae` with the main branch's

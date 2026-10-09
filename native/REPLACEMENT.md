@@ -2,6 +2,58 @@
 
 ## Current continuation state (2026-10-09)
 
+Native replacement succeeded at 17:07 local after commit `9d7d526` fixed
+BOM-less UTF-8 receipt reads and PowerShell 7 module-path inheritance in the
+Windows PowerShell elevation helper. The successful `switch-result.json` is
+in `%LOCALAPPDATA%/RimeJev/backups/native-20261009-155707-5d2738f6`.
+The earlier `continuation-outcome.json` in that directory records the earlier
+cancelled attempt only; it must not be used as current installation state.
+
+The server SHA-256 is
+`582BB77912D72B5A10AEB175DCEBC6EB4575591530D3BCB61BF6AA5782518241`.
+Registered/distribution x64 DLL SHA-256 is
+`C6453073BB13AE4D48DFF95880751A3D5FC04E2A9B3911244795CAF13EE2AAB4`.
+The server ran as PID 8852 and ordinary live bridge as PID 15648 after the
+switch. These IDs are observations, not permanent service identifiers.
+Registered DLL COM load/create/release and isolated context/nasal regressions
+passed; one COM reference is still retained and hot unloading is not certified.
+No user application was terminated. Existing applications may retain old DLLs.
+
+At 17:40 local, Lua commit `bbadb1a` was deployed to avoid acknowledging an
+unchanged pending menu after context capture. Such acknowledgment routes through
+the full preedit write path and can provoke another document invalidation.
+Backup: `%LOCALAPPDATA%/RimeJev/backups/update-20261009-174049`.
+Installed files now match `runtime/native-bundle-20261009-bbadb1a`, which records
+the same native CI binaries and the updated Lua. The original `9367fda` bundle
+is retained unmodified as historical evidence, not called the latest adapter.
+
+`deployment-outcome-20261009.json` beside the native receipt records five
+installed bundle-file checks, the updated installation manifest, removal of
+trial/mock gates and eight unchanged protected inputs: provider config, key,
+preferences, schema list, skin, nasal profile, original prism and `rime.dll`.
+The usage ledger legitimately advanced with user typing and two explicit
+synthetic probes; it was not overwritten or rolled back. The backend observed
+three native apply acknowledgments after the Lua fix, but this is not broad
+GUI acceptance.
+
+The user's browser screenshot still shows an incorrect rank-1 choice for
+the company-manager sentence. TSF context apps remain an empty list. A
+two-call synthetic comparison using the screenshot's seven candidates returned
+rank 1 without context (0.60) and rank 5 with the supplied seven-character
+prefix (1.00). This confirms that sample's context gap, not verified browser
+text capture. Do not silently allowlist all browsers or label the current
+installation as passing semantic/target-application acceptance.
+
+For native rollback after the Lua follow-up, the original native switch's
+hash guard deliberately rejects the newer Lua. First restore the backed-up
+Lua/schema from the matching adapter update (only if current hashes still match
+the recorded deployment), update the installation manifest and deploy; then
+the original native rollback receipt can restore its matched files. Do not
+bypass hash checks or overwrite a user's later edits. F8 immediately disables
+automatic requests while retaining ordinary Rime typing.
+
+## Earlier cancelled attempt (2026-10-09)
+
 Source integration is committed as `9367fda`. The new native DLL/server were
 downloaded from successful CI run `37888288576` at `aaf1cae`; the patch and all
 three native headers match the integrated source. A verified 22-file bundle
