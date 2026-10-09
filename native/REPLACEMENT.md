@@ -1,5 +1,50 @@
 # Native replacement handoff
 
+## Current continuation state (2026-10-09)
+
+Source integration is committed as `9367fda`. The new native DLL/server were
+downloaded from successful CI run `37888288576` at `aaf1cae`; the patch and all
+three native headers match the integrated source. A verified 22-file bundle
+is staged at `runtime/native-bundle-20261009-9367fda`. The full combined adapter
+passes local regressions, not visible candidate-window acceptance.
+
+The 2026-10-09 replacement attempt did **not** install that bundle: Windows
+reported the UAC prompt cancelled before the elevated helper started. No
+`switch-result.json` was produced. The existing server remained PID 21668;
+the ordinary bridge restarted from the committed source as PID 2852 and
+reported a fresh live heartbeat, no errors and zero calls today at inspection.
+No live probe was sent. PIDs and counters are observations, not persistent IDs.
+
+Backup receipt:
+`%LOCALAPPDATA%/RimeJev/backups/native-20261009-155707-5d2738f6/replacement.json`.
+The adjacent `continuation-outcome.json` records the cancelled attempt and
+post-attempt verification. All six installed-file/manifest hashes and nine
+protected-file hashes remain equal to their backups. Protected files include
+provider config, encrypted key, preferences, usage ledger, default schema list,
+skin, personal nasal profile, original Rime prism and `rime.dll`. Bridge sources
+are also backed up. No user application was terminated and no registry or ACL
+change was made for this attempt.
+
+**The installed Lua/schema still contain the 2026-10-08 trial-only gate and
+stopped mock IPC path.** Therefore normal-application Jev request recovery is
+not yet deployed. The native/adapter files still match the later successful
+2026-10-08 15:26 trial replacement, not the earlier cancelled UAC receipt.
+Another native replacement requires fresh administrator confirmation; do not
+silently bypass it or describe the prepared bundle as installed.
+
+To resume, recheck the receipt's hashes and run `Invoke-NativeSwitch.ps1` with
+that `replacement.json`, stopping/restarting only the ordinary bridge around
+the transaction. If any installed file has changed, the script refuses and a
+new backup/inspection is required. Reopen target applications after a successful
+switch; already-running applications can retain the old DLL.
+
+Source rollback was verified in `runtime/rollback-check-aa80d661`:
+`python scripts/Test-ContextRollback.py --base d343589` restores the merge's
+first-parent tree exactly, preserving main-branch worker/typing improvements.
+This is source rollback only, not execution of a native installation rollback.
+
+## Earlier installation records
+
 Status: trial installed on 2026-10-07 at the user's explicit request to replace
 directly with rollback available. GUI acceptance remains incomplete; this is
 not yet a fully tested production release.

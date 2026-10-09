@@ -45,6 +45,15 @@ running elsewhere therefore received no input requests. The earlier cancelled
 UAC receipt did not describe the later successful 2026-10-08 trial replacement.
 Deployment and backup state are recorded separately in `REPLACEMENT.md`.
 
+After committing the integration as `9367fda`, a disposable-clone rollback
+restored its first parent `d343589` exactly. The 22-file bundle was staged and
+verified, but its native/adapter installation was not performed: UAC was
+cancelled before the elevated helper started. All 15 installed/protected-file
+hashes remained unchanged and the ordinary bridge restarted successfully.
+The installed trial-only adapter remains in place; request recovery in ordinary
+applications must not be reported as delivered. See the 2026-10-09 receipt in
+`REPLACEMENT.md` for the exact pending transaction.
+
 Visible candidate-window behavior, real target applications, key-path latency
 and daily-use stability still require acceptance; these tests do not certify
 terminal/game support or universal sensitive-field detection.
