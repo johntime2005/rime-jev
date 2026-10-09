@@ -162,15 +162,26 @@ def run(typing_profile=False, nasal_profile=False, pebrel_context=False, context
             prefix = '\u4f60\u597d  \nemoji \U0001f600'
             prop('jev_context', wire('1-1-1', prefix))
             prop('jev_refresh', 'captured')
+            assert getprop('jev_refresh_ack') != 'captured', (
+                'context-only capture must not rewrite unchanged pending preedit')
+            assert menu() == original, 'context-only capture changed the visible menu'
             submitted = json.loads(next(inbox.glob('*.json')).read_text(encoding='utf-8'))
             assert submitted['context'] == prefix and submitted['document']['stamp'] == '1-1-1'
             result = wait_result()
             assert result.read_text().splitlines()[-1] == '1-1-1'
+            # Some text stores echo the frontend's preedit write as an external
+            # edit. Do not acknowledge unchanged pending UI back into that loop.
+            prop('jev_context', wire('1-1-2', prefix))
+            prop('jev_refresh', 'same-text-new-stamp')
+            assert getprop('jev_refresh_ack') != 'same-text-new-stamp'
+            assert not result.exists(), 'a new stamp must still cancel the old result'
+            result = wait_result()
+            assert result.read_text().splitlines()[-1] == '1-1-2'
             # A generic filter refresh may not consume a document-bound result.
             key(65477, 4 | 8)
             assert menu()['items'][0][0] == original['items'][0][0]
             # Same caret/pinyin but changed external text cancels the old result.
-            prop('jev_context', wire('1-1-2', 'changed'))
+            prop('jev_context', wire('1-1-20', 'changed'))
             assert not result.exists()
             prop('jev_refresh', 'changed')
             assert menu()['items'][0][0] == original['items'][0][0]
@@ -258,6 +269,7 @@ def run(typing_profile=False, nasal_profile=False, pebrel_context=False, context
                 'displayed_winner_committed': True, 'consent_and_sensitive_gates': True,
                 'manual_selection_survives_context_change': True,
                 'manual_clear_survives_modifiers': True,
+                'context_only_capture_does_not_rewrite_pending_preedit': True,
                 'live_tsf_gui_tested': False, 'provider_calls': 0, 'root': str(root)}, indent=2))
             return
         if pebrel_context:

@@ -126,6 +126,7 @@ local function clear(state, cause)
   cause = cause or 'adapter_error'
   cancel(state, nil, cause)
   state.snapshot = nil
+  state.context_visible = nil
   state.context_reason = cause
   state.cache_epoch = state.cache_epoch + 1
   state.attempted, state.paused = nil, nil
@@ -176,6 +177,24 @@ end
 
 local function refresh(ctx)
   ctx:refresh_non_confirmed_composition()
+end
+
+local function visible_signature(ctx, count)
+  local parts = { ctx:get_preedit().text }
+  if not ctx.composition:empty() then
+    local segment = ctx.composition:back()
+    parts[#parts + 1] = tostring(segment.selected_index or 0)
+    if segment.menu then
+      for i = 0, count - 1 do
+        local candidate = segment.menu:get_candidate_at(i)
+        if not candidate then break end
+        parts[#parts + 1] = candidate.text
+        parts[#parts + 1] = candidate.comment or ''
+      end
+    end
+  end
+  for i, part in ipairs(parts) do parts[i] = #part .. ':' .. part end
+  return table.concat(parts, '|')
 end
 
 local function prepare(buffer, env)
@@ -317,6 +336,11 @@ function M.processor.init(env)
     elseif name == 'jev_context' then
       local wire = c:get_property(name)
       if wire ~= state.context_wire then
+        if wire == 'pending' then state.context_visible = nil
+        elseif not state.context_visible then
+          local ok, before = pcall(visible_signature, c, state.count)
+          if ok then state.context_visible = before end
+        end
         cancel(state, nil, 'document_changed')
         state.snapshot, state.attempted = nil, nil
         state.context_wire, state.context_dirty = wire, true
@@ -334,9 +358,17 @@ function M.processor.init(env)
         settings(state)
         if state.context_dirty then
           state.context_dirty = nil
+          local before = state.context_visible
+          state.context_visible = nil
           if not state.paused then
+            before = before or visible_signature(c, state.count)
             refresh(c)
-            c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
+            -- An unchanged pending menu needs only a backend request. Sending
+            -- it through DoEditSession rewrites preedit; some stores report
+            -- that as an external edit and cancel the just-created request.
+            if visible_signature(c, state.count) ~= before then
+              c:set_property('jev_refresh_ack', c:get_property('jev_refresh'))
+            end
             return
           end
         end
