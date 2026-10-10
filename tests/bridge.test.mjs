@@ -86,6 +86,45 @@ test('validates complete snapshots and rejects malformed, stale, untrusted input
   }
 });
 
+test('a busy diagnostic status file does not stop requests and recovers on the next heartbeat', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rime-jev-status-busy-'));
+  let blocked = true, attempts = 0;
+  const bridge = await startBridge({ root, mock: true, debounceMs: 0, writeStatus: async (file, text) => {
+    attempts++;
+    if (blocked) throw Object.assign(new Error('synthetic sharing violation'), { code: 'EPERM' });
+    await atomicWrite(file, text);
+  } });
+  try {
+    await waitFor(async () => attempts);
+    const r = { ...request(), instance: bridge.instance, token: bridge.token };
+    await atomicWrite(path.join(bridge.runtime, 'inbox', `${r.id}.json`), JSON.stringify(r));
+    const response = await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', `${r.id}.res`), 'utf8'));
+    assertResponse(response, r, 'ok', '2,1,3');
+    assert.ok((await fs.readFile(path.join(bridge.runtime, 'bridge.info'), 'utf8')).includes(bridge.instance));
+    blocked = false;
+    const status = await waitFor(() => fs.readFile(path.join(root, 'status.json'), 'utf8').then(JSON.parse));
+    assert.ok(status.statusWriteFailures >= 1);
+    assert.equal(status.outcomes.promoted, 1);
+    assert.equal(status.callsToday, 0);
+    assert.ok(!JSON.stringify(status).includes('synthetic sharing violation'));
+  } finally {
+    await bridge.stop();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('non-sharing status failures still reject done and release the bridge lock', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rime-jev-status-fatal-'));
+  const bridge = await startBridge({ root, writeStatus: async () => {
+    throw Object.assign(new Error('synthetic full disk'), { code: 'ENOSPC' });
+  } });
+  try {
+    await assert.rejects(bridge.done, { code: 'ENOSPC' });
+    await assert.rejects(fs.access(path.join(bridge.runtime, 'bridge.lock')), { code: 'ENOENT' });
+    await assert.rejects(fs.access(path.join(bridge.runtime, 'bridge.info')), { code: 'ENOENT' });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test('context diagnostics accept only enums consistent with the request', () => {
   const r = request();
   validateRequest({ ...r, contextState: { enabled: true, reason: 'available' } }, 'instance', 'token');

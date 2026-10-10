@@ -9,6 +9,10 @@ This supersedes `v0.1.0-windows.1`: Windows runner validation exposed inconsiste
 bridge process identification. Existing path parents now expand to their long
 names before comparison, including new child paths. Exact process and linked
 path guards remain enforced. The earlier tag/assets are retained, not replaced.
+An exhausted sharing-violation retry on diagnostic `status.json` no longer stops
+the bridge: the next heartbeat retries the status write. Request/ledger writes
+remain strict, and no provider retry is added. `statusWriteFailures` counts
+these transient diagnostic failures; non-sharing errors still stop the bridge.
 
 ## Choose an asset
 
@@ -51,9 +55,10 @@ path guards remain enforced. The earlier tag/assets are retained, not replaced.
   never the installed IME, personal data, rollback backups or source worktrees.
 - Future native tests remove generated dictionary indices by default; opt in
   to `--keep-build` only for debugging. Failed dependency installs clean staging.
-- 73 local Node tests and 32 Python tests pass. Windows PowerShell 5.1 installer/cleanup tests,
-  reproducible package checks, and isolated real-librime migration smoke cover
-  install, update, uninstall and execution after deleting the download folder.
+- 75 local Node tests and 32 Python tests pass, covering Windows PowerShell 5.1,
+  cleanup and reproducible packages. Isolated real-librime smoke also verifies
+  downloaded dependencies. Checks cover install, update, uninstall and execution
+  after deleting the download folder.
 - Tests explicitly exercise Windows short-path aliases for clean installs,
   repeat installs, bridge startup/shutdown, uninstall and cache cleanup.
 - Native binaries are from successful CI run

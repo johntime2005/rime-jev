@@ -40,8 +40,15 @@ containment, installation-manifest and command-argument comparisons, without
 weakening exact process identity or linked-path refusal. Two additional local
 regressions explicitly exercise these aliases; all 32 Python tests pass.
 The initial CI attempt also hit an exhausted local `status.json` rename retry
-(`EPERM`); the same Node suite passed on rerun. That transient Windows file
-contention remains a residual runtime risk, not a reason to mask CI failures.
+(`EPERM`). It passed on rerun but recurred in the next runner, aborting the
+bridge and leaving test shutdown pending. Diagnostic sharing errors now defer
+only the status write until the next heartbeat; the failure count is included
+in the next successful status. Request/ledger/bridge-info writes stay strict,
+non-sharing errors still reject `done`, and provider requests are never retried.
+Regression tests inject repeated diagnostic contention, verify request handling
+and recovery, and confirm fatal I/O errors release the lock; all 75 local Node
+tests pass. CI has explicit
+test timeouts and still runs installer checks after a Node test failure.
 The earlier preview is marked superseded and its assets are not overwritten.
 
 ## Transport cancellation and connection reuse

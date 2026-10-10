@@ -43,7 +43,8 @@ jobs:
         shell: pwsh
         run: ./scripts/Test-NativeContext.ps1
       - name: Unit tests
-        run: node --test tests/*.test.mjs
+        timeout-minutes: 3
+        run: node --test --test-timeout=60000 tests/*.test.mjs
       - name: Packaging tests
         run: python -m unittest discover -s tests -p "test_*.py"
       - name: Stage matched bundle

@@ -113,7 +113,7 @@ export async function atomicWrite(filename, contents, { rename = fs.rename } = {
 }
 
 export async function startBridge({ root, apiKey = '', mock = false, callLimit = 200, timeoutMs = 4000, provider = {},
-  debounceMs = 100, cacheTtlMs = 15000, workerUrl, contextProvider, contextReader }) {
+  debounceMs = 100, cacheTtlMs = 15000, workerUrl, contextProvider, contextReader, writeStatus = atomicWrite }) {
   if (!Number.isInteger(callLimit) || callLimit < 1 || callLimit > 10000) throw new Error('Invalid callLimit');
   if (!Number.isInteger(debounceMs) || debounceMs < 0 || debounceMs > 2000) throw new Error('Invalid debounceMs');
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 12000) throw new Error('Invalid timeoutMs');
@@ -152,6 +152,7 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
   } catch (error) { if (error.code !== 'ENOENT') { await fs.unlink(lockPath); throw error; } }
   let stopped = false, heartbeatAt = 0, cleanupAt = 0, active = null, lastError = null;
   let lastResult = null, statusDirty = false, infoAt = 0, requestState = null;
+  let statusWriteFailures = 0;
   let lastCancellation = null, lastAdapterCancellation = null;
   const cancellationsByPhase = {}, adapterCancellations = {};
   const seen = new Map(), deliveries = new Map();
@@ -164,7 +165,7 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
       await atomicWrite(path.join(runtime, 'bridge.info'), `JEVWIN1\n${instance}\n${token}\n${mode}\n${Math.floor(Date.now() / 1000)}\n`);
       infoAt = Date.now();
     }
-    await atomicWrite(path.join(root, 'status.json'), JSON.stringify({ mode, pid: process.pid,
+    const status = JSON.stringify({ mode, pid: process.pid,
       endpoint: provider.endpoint, model: provider.model, protocol: provider.protocol,
       promptVersion: provider.allowNone ? CONTINUATION_PROMPT_VERSION : 'ime-completion-v3-object',
       auth: provider.auth, keyConfigured: Boolean(apiKey),
@@ -175,7 +176,14 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
       cache: { ...cacheMetrics, ttlMs: cacheTtlMs, entries: cache.size },
       requestState: requestState ? { phase: requestState.phase, ageMs: Math.max(0, Date.now() - requestState.startedAt) } : null,
       outcomes, cancellationsByPhase, lastCancellation, adapterCancellations, lastAdapterCancellation,
-      lastResult, lastError, updatedAt: new Date().toISOString() }, null, 2));
+      lastResult, lastError, statusWriteFailures, updatedAt: new Date().toISOString() }, null, 2);
+    try { await writeStatus(path.join(root, 'status.json'), status); }
+    catch (error) {
+      // A reader/antivirus may hold this diagnostic file longer than one bounded
+      // atomic-write attempt. Retry on the next heartbeat, not a provider call.
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error;
+      statusWriteFailures++;
+    }
   };
   const exists = async (filename) => { try { await fs.access(filename); return true; } catch { return false; } };
   const readContext = async (operation, filename) => {
@@ -455,6 +463,9 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
       await fs.rm(lockPath, { force: true });
     }
   })();
+  // Observe failures immediately; callers still receive the original rejecting
+  // promise through done/stop, even if they await it only during shutdown.
+  void loop.catch(() => {});
   if (documentContext?.warm) void Promise.resolve(documentContext.warm()).catch(() => {});
   if (mode === 'live') client.warm();
   return { instance, token, mode, runtime, stop: async () => { stopped = true; await loop; }, done: loop };

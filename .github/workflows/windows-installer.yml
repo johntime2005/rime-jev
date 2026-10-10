@@ -19,8 +19,11 @@ jobs:
         with:
           python-version: '3.13'
       - name: Provider, transport and bridge tests (local services only)
-        run: node --test tests/*.test.mjs
+        timeout-minutes: 3
+        run: node --test --test-timeout=60000 tests/*.test.mjs
       - name: Packaging and Windows PowerShell installer tests (isolated, no IME deployment)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
         run: python -X utf8 -m unittest discover -s tests -p "test_*.py" -v
       - name: Build allowlisted standard ZIP
         run: python scripts/Package-Release.py --version ci-${{ github.run_number }}
