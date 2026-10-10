@@ -1,11 +1,11 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Installer.Common.ps1')
-$project = Split-Path -Parent $PSScriptRoot
-$data = Join-Path $env:LOCALAPPDATA 'RimeJev'
+$project = Get-JevFullPath (Split-Path -Parent $PSScriptRoot)
+$data = Get-JevFullPath (Join-Path $env:LOCALAPPDATA 'RimeJev')
 $installationPath = Join-Path $data 'installation.json'
 if (Test-Path -LiteralPath $installationPath) {
     $installation = Get-Content -LiteralPath $installationPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($installation.project) { $project = [IO.Path]::GetFullPath($installation.project) }
+    if ($installation.project) { $project = Get-JevFullPath $installation.project }
 }
 $lock = Join-Path $data 'runtime\bridge.lock'
 if (Test-Path -LiteralPath $lock) {

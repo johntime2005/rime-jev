@@ -32,6 +32,18 @@ removed after the child process releases librime mappings. This is not an
 on-screen deployment test, ARM64 test, native UAC/rollback execution, or broad
 different-computer acceptance. Those limitations remain explicit in the release.
 
+GitHub Windows runner validation of `52d360f` exposed an 8.3 alias difference:
+`RUNNER~1` temporary paths versus long paths returned by PowerShell. This made
+cleanup fail closed and prevented start/stop from recognizing the same bridge
+process. The `windows.2` installer expands existing short-name parents before
+containment, installation-manifest and command-argument comparisons, without
+weakening exact process identity or linked-path refusal. Two additional local
+regressions explicitly exercise these aliases; all 32 Python tests pass.
+The initial CI attempt also hit an exhausted local `status.json` rename retry
+(`EPERM`); the same Node suite passed on rerun. That transient Windows file
+contention remains a residual runtime risk, not a reason to mask CI failures.
+The earlier preview is marked superseded and its assets are not overwritten.
+
 ## Transport cancellation and connection reuse
 
 The initial inspection found the earlier cooperative-worker fix already live,

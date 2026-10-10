@@ -1,5 +1,6 @@
 """Run Windows PowerShell 5.1 in disposable paths, never deploy the real IME."""
 import hashlib
+import ctypes
 import importlib.util
 import json
 import os
@@ -79,7 +80,7 @@ foreach ($file in (Get-ChildItem -LiteralPath (Join-Path $env:JEV_SOURCE 'script
         self.install()
         first = self.manifest()
         app = Path(first['project'])
-        self.assertTrue(app.is_relative_to(self.data / 'app'))
+        self.assertTrue(app.resolve().is_relative_to((self.data / 'app').resolve()))
         self.assertTrue(first['managedApp'])
         patched = (self.rime / 'default.custom.yaml').read_text(encoding='utf-8')
         self.assertIn('luna_pinyin', patched)
@@ -180,6 +181,34 @@ if (Test-Path -LiteralPath $stage) { throw 'Stage was retained' }
 if (-not (Test-Path -LiteralPath $base)) { throw 'Parent was deleted' }
 """)
 
+    def test_short_path_aliases_match_installation_and_bridge_identity(self):
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = ctypes.windll.kernel32.GetShortPathNameW(str(self.root), buffer, len(buffer))
+        if not length or '~' not in buffer.value:
+            self.skipTest('8.3 aliases are disabled on this filesystem')
+        self.env['JEV_TEST_SHORT_ROOT'] = buffer.value
+        self.env['LOCALAPPDATA'] = str(Path(buffer.value) / 'Local Data')
+        self.install()
+        self.env['JEV_APP'] = self.manifest()['project']
+        self.command(r"""
+. (Join-Path $env:JEV_SOURCE 'scripts/Installer.Common.ps1')
+$short=Join-Path $env:JEV_TEST_SHORT_ROOT 'new\child'
+$long=Join-Path $env:JEV_TEST_ROOT 'new\child'
+if ((Get-JevFullPath $short) -ne (Get-JevFullPath $long)) { throw 'Non-existing child was not normalized' }
+$data=Join-Path $env:LOCALAPPDATA 'RimeJev'
+$proc=[pscustomobject]@{Name='node.exe'; CommandLine=('node.exe "' + (Join-Path $env:JEV_APP 'bridge.mjs') + '" "' + $data + '"')}
+if (-not (Test-JevBridgeProcess $proc $env:JEV_APP (Get-JevFullPath $data))) { throw 'Short data argument was not matched' }
+try { & (Join-Path $env:JEV_APP 'scripts/Start-Bridge.ps1') }
+finally {
+    & (Join-Path $env:JEV_APP 'scripts/Stop-Bridge.ps1')
+    Start-Sleep -Seconds 1
+}
+""")
+        self.assertFalse((self.data / 'runtime/bridge.lock').exists())
+        self.install()
+        self.command("& (Join-Path $env:JEV_APP 'scripts/Uninstall.ps1') -NoDeploy -NoShortcuts")
+        self.assertEqual((self.rime / 'default.custom.yaml').read_bytes(), self.original)
+
     def test_bad_yaml_fails_before_copying_any_application_files(self):
         bad = b'patch: {schema_list: []}\n'
         (self.rime / 'default.custom.yaml').write_bytes(bad)
@@ -241,6 +270,18 @@ Expand-JevZip (Join-Path $env:JEV_TEST_ROOT 'bad.zip') (Join-Path $env:JEV_TEST_
         finally:
             self.command("& (Join-Path $env:JEV_APP 'scripts/Stop-Bridge.ps1')")
         self.assertFalse((self.data / 'runtime/bridge.lock').exists())
+        self.command(r"""
+$app=[IO.Path]::GetFullPath($env:JEV_APP)
+$commandPath=Join-Path $app 'scripts\Start-Bridge.ps1'
+for ($i=0; $i -lt 100; $i++) {
+    $helpers=@(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object {
+        $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($commandPath) -and $_.CommandLine.Contains('-Foreground')
+    })
+    if (-not $helpers.Count) { break }
+    Start-Sleep -Milliseconds 100
+}
+if ($helpers.Count) { throw 'The hidden bridge launcher did not exit after stopping Node.' }
+""")
 
 
 if __name__ == '__main__':

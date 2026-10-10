@@ -8,7 +8,7 @@
 
 **无需复制原来约 10 GB 的开发目录，也不需要安装 Git、Python、Visual Studio 或手动配置 Node。**
 到 [GitHub Releases](https://github.com/johntime2005/rime-jev/releases) 下载
-`rime-jev-v0.1.0-windows.1-windows-standard.zip`。仓库目前为私有，需登录有访问权限的 GitHub 账户；
+`rime-jev-v0.1.0-windows.2-windows-standard.zip`。仓库目前为私有，需登录有访问权限的 GitHub 账户；
 不要选择 GitHub 自动生成的 `Source code` 包作为普通安装包。
 
 1. 新电脑先安装 [Windows 小狼毫 / Rime](https://rime.im/)，确认原输入法能正常打字。
@@ -465,9 +465,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Clean-Runtime.ps1 
 ```powershell
 node --test tests/*.test.mjs
 python -X utf8 -m unittest discover -s tests -p "test_*.py" -v
-git tag -a v0.1.0-windows.1 -m "Windows migration preview"
-python scripts/Package-Release.py --version v0.1.0-windows.1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Publish-GitHub.ps1 -Tag v0.1.0-windows.1 -Prerelease
+git tag -a v0.1.0-windows.2 -m "Windows migration preview"
+python scripts/Package-Release.py --version v0.1.0-windows.2
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Publish-GitHub.ps1 -Tag v0.1.0-windows.2 -Prerelease
 ```
 
 后续版本使用新标签，不覆盖已发布资产。可选原生 ZIP 需先用 `scripts/Package-Native.py` 验证并准备匹配包，

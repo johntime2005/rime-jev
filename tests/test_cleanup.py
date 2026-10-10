@@ -1,5 +1,6 @@
 """Exercise cleanup only in disposable Git workspaces, never the live IME."""
 import hashlib
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -78,6 +79,15 @@ class CleanupTests(unittest.TestCase):
             self.skipTest('Creating symbolic links is not permitted on this host')
         self.cleanup('-Apply', success=False)
         self.assertTrue(self.build.exists())
+
+    def test_workspace_short_alias_resolves_before_containment_checks(self):
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = ctypes.windll.kernel32.GetShortPathNameW(str(self.root), buffer, len(buffer))
+        if not length or '~' not in buffer.value:
+            self.skipTest('8.3 aliases are disabled on this filesystem')
+        self.root = Path(buffer.value)
+        self.cleanup('-Apply')
+        self.assertFalse(self.build.exists())
 
     def test_optional_caches_require_receipts_and_preserve_reports(self):
         trial = self.root / 'runtime/migration-smoke-11223344'

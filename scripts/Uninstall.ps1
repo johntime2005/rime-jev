@@ -9,9 +9,9 @@ if ((Test-Path -LiteralPath $nativePath) -and (Get-Content -LiteralPath $nativeP
     throw 'Roll back the experimental native components with Rollback-Native.cmd before uninstalling the adapter.'
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$rime = [IO.Path]::GetFullPath($manifest.rime).TrimEnd('\')
-$backupRoot = [IO.Path]::GetFullPath($manifest.backup).TrimEnd('\')
-$dataRoot = [IO.Path]::GetFullPath($data).TrimEnd('\')
+$rime = (Get-JevFullPath $manifest.rime).TrimEnd('\')
+$backupRoot = (Get-JevFullPath $manifest.backup).TrimEnd('\')
+$dataRoot = (Get-JevFullPath $data).TrimEnd('\')
 if (-not $backupRoot.StartsWith($dataRoot + '\backups\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid backup directory.' }
 Assert-JevPlainPath $rime
 Assert-JevPlainPath $backupRoot
@@ -28,7 +28,7 @@ foreach ($file in $manifest.files) {
         throw "File changed after install; refusing to overwrite: $dest. Merge backup manually."
     }
     if ($file.existed) {
-        $source = [IO.Path]::GetFullPath($file.backup)
+        $source = Get-JevFullPath $file.backup
         if (-not $source.StartsWith($backupRoot + '\', [StringComparison]::OrdinalIgnoreCase) -or
             -not (Test-Path -LiteralPath $source -PathType Leaf)) { throw 'Missing or invalid uninstall backup.' }
         Assert-JevPlainPath $source

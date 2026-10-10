@@ -1,4 +1,36 @@
 # Shared by the source checkout and the allowlisted release package. PowerShell 5.1 compatible.
+function Get-JevFullPath([string]$Path) {
+    $full = [IO.Path]::GetFullPath($Path)
+    if (-not $full.Contains('~')) { return $full }
+    if (-not ('RimeJev.PathNames' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+using System.Text;
+namespace RimeJev {
+    public static class PathNames {
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        public static extern uint GetLongPathName(string path, StringBuilder buffer, uint length);
+    }
+}
+'@
+    }
+    # Expand existing 8.3 parents even when the final install directory is new.
+    $existing = $full
+    $tail = @()
+    while (-not (Test-Path -LiteralPath $existing)) {
+        $parent = Split-Path -Parent $existing
+        if (-not $parent -or $parent -eq $existing) { return $full }
+        $tail = @(Split-Path -Leaf $existing) + $tail
+        $existing = $parent
+    }
+    $buffer = New-Object Text.StringBuilder 32768
+    $length = [RimeJev.PathNames]::GetLongPathName($existing, $buffer, $buffer.Capacity)
+    if (-not $length -or $length -ge $buffer.Capacity) { throw 'Could not normalize the Windows short path.' }
+    $expanded = $buffer.ToString()
+    foreach ($part in $tail) { $expanded = Join-Path $expanded $part }
+    return $expanded
+}
+
 function Join-JevPath([string]$Root, [string]$Relative) {
     if (-not $Relative -or $Relative -match '[:<>"|?*\x00-\x1f]' -or [IO.Path]::IsPathRooted($Relative)) {
         throw "Invalid relative path: $Relative"
@@ -9,8 +41,8 @@ function Join-JevPath([string]$Root, [string]$Relative) {
             throw "Unsafe path component: $Relative"
         }
     }
-    $base = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
-    $path = [IO.Path]::GetFullPath((Join-Path $base $Relative))
+    $base = (Get-JevFullPath $Root).TrimEnd('\', '/')
+    $path = Get-JevFullPath (Join-Path $base $Relative)
     if (-not $path.StartsWith($base + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Path escapes its root: $Relative"
     }
@@ -50,8 +82,8 @@ function Get-JevPaths([string]$RimeUserDir, [string]$WeaselRoot) {
     if (-not [IO.Path]::IsPathRooted($rime) -or -not [IO.Path]::IsPathRooted($weasel)) {
         throw 'RimeUserDir and WeaselRoot must be absolute filesystem paths.'
     }
-    $rime = [IO.Path]::GetFullPath($rime).TrimEnd('\')
-    $weasel = [IO.Path]::GetFullPath($weasel).TrimEnd('\')
+    $rime = (Get-JevFullPath $rime).TrimEnd('\')
+    $weasel = (Get-JevFullPath $weasel).TrimEnd('\')
     foreach ($name in @('WeaselDeployer.exe', 'rime.dll')) {
         if (-not (Test-Path -LiteralPath (Join-Path $weasel $name) -PathType Leaf)) {
             throw "Incomplete Weasel installation: missing $name in $weasel"
@@ -59,7 +91,7 @@ function Get-JevPaths([string]$RimeUserDir, [string]$WeaselRoot) {
     }
     Assert-JevPlainPath $rime
     Assert-JevPlainPath $weasel
-    return [pscustomobject]@{ Rime=$rime; Weasel=$weasel; Data=(Join-Path $env:LOCALAPPDATA 'RimeJev') }
+    return [pscustomobject]@{ Rime=$rime; Weasel=$weasel; Data=(Get-JevFullPath (Join-Path $env:LOCALAPPDATA 'RimeJev')) }
 }
 
 function Initialize-JevData([string]$Data) {
@@ -77,14 +109,14 @@ function Write-JevJson([string]$Path, $Value) {
 }
 
 function Remove-JevStagingDirectory([string]$Root, [string]$Path) {
-    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $full = (Get-JevFullPath $Path).TrimEnd('\')
     $leaf = Split-Path -Leaf $full
     if ($leaf -notmatch '^(extract|ice|staging)-[0-9a-f]{32}$' -or (Join-JevPath $Root $leaf) -ne $full) {
         throw 'Refusing to clean a path outside the immediate staging directory.'
     }
     Assert-JevPlainPath $full
     if (-not (Test-Path -LiteralPath $full)) { return }
-    if ((Resolve-Path -LiteralPath $full).Path -ne $full -or
+    if ((Get-JevFullPath (Resolve-Path -LiteralPath $full).Path) -ne $full -or
         @(Get-ChildItem -LiteralPath $full -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) {
         throw 'Refusing to clean a linked staging directory.'
     }
@@ -125,10 +157,14 @@ function Get-JevArchitecture {
 
 function Test-JevBridgeProcess($Process, [string]$Project, [string]$Data) {
     if (-not $Process -or $Process.Name -ne 'node.exe' -or -not $Process.CommandLine) { return $false }
-    $command = $Process.CommandLine.Replace('/', '\')
+    $arguments = @([regex]::Matches($Process.CommandLine, '"([^"\r\n]*)"|([^\s"]+)') | ForEach-Object {
+        $value = if ($_.Groups[1].Success) { $_.Groups[1].Value } else { $_.Groups[2].Value }
+        if ([IO.Path]::IsPathRooted($value)) {
+            try { (Get-JevFullPath $value).TrimEnd('\') } catch { }
+        }
+    })
     foreach ($path in @((Join-Path $Project 'bridge.mjs'), $Data)) {
-        $literal = [regex]::Escape([IO.Path]::GetFullPath($path).TrimEnd('\'))
-        if ($command -notmatch ('(?i)(?:^|\s)(?:"' + $literal + '"|' + $literal + ')(?=\s|$)')) { return $false }
+        if ((Get-JevFullPath $path).TrimEnd('\') -notin $arguments) { return $false }
     }
     return $true
 }

@@ -1,8 +1,8 @@
 param([switch]$Foreground)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Installer.Common.ps1')
-$project = Split-Path -Parent $PSScriptRoot
-$data = Join-Path $env:LOCALAPPDATA 'RimeJev'
+$project = Get-JevFullPath (Split-Path -Parent $PSScriptRoot)
+$data = Get-JevFullPath (Join-Path $env:LOCALAPPDATA 'RimeJev')
 $node = Get-JevNode
 if (-not $node) { throw 'Node 22.17+ was not found. Run Install.cmd to repair dependencies.' }
 if (-not $Foreground) {

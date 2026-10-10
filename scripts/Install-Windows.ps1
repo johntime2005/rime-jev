@@ -40,8 +40,8 @@ $manifestPath = Join-Path $paths.Data 'installation.json'
 $existing = $null
 if (Test-Path -LiteralPath $manifestPath) {
     $existing = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ([IO.Path]::GetFullPath($existing.rime).TrimEnd('\') -ne $paths.Rime) { throw 'This account already has Jev in a different Rime directory.' }
-    if ($existing.weasel -and [IO.Path]::GetFullPath($existing.weasel).TrimEnd('\') -ne $paths.Weasel) {
+    if ((Get-JevFullPath $existing.rime).TrimEnd('\') -ne $paths.Rime) { throw 'This account already has Jev in a different Rime directory.' }
+    if ($existing.weasel -and (Get-JevFullPath $existing.weasel).TrimEnd('\') -ne $paths.Weasel) {
         throw 'Weasel moved since installation. Restore/uninstall the previous adapter before changing its runtime directory.'
     }
     foreach ($file in $existing.files) {

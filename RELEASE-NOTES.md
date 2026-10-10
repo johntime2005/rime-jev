@@ -1,8 +1,14 @@
-# v0.1.0-windows.1 - Portable Windows installation preview
+# v0.1.0-windows.2 - Portable Windows installation preview
 
 Download a Windows ZIP from this release, extract the whole archive, and run
 `Install.cmd`. See the Chinese quick start at the top of `README.md`.
 The repository is private: sign in to a GitHub account with repository access.
+
+This supersedes `v0.1.0-windows.1`: Windows runner validation exposed inconsistent
+8.3 path aliases (`RUNNER~1` versus `runneradmin`) in containment checks and
+bridge process identification. Existing path parents now expand to their long
+names before comparison, including new child paths. Exact process and linked
+path guards remain enforced. The earlier tag/assets are retained, not replaced.
 
 ## Choose an asset
 
@@ -45,9 +51,11 @@ The repository is private: sign in to a GitHub account with repository access.
   never the installed IME, personal data, rollback backups or source worktrees.
 - Future native tests remove generated dictionary indices by default; opt in
   to `--keep-build` only for debugging. Failed dependency installs clean staging.
-- 73 local Node tests and 30 Python tests pass. Windows PowerShell 5.1 installer/cleanup tests,
+- 73 local Node tests and 32 Python tests pass. Windows PowerShell 5.1 installer/cleanup tests,
   reproducible package checks, and isolated real-librime migration smoke cover
   install, update, uninstall and execution after deleting the download folder.
+- Tests explicitly exercise Windows short-path aliases for clean installs,
+  repeat installs, bridge startup/shutdown, uninstall and cache cleanup.
 - Native binaries are from successful CI run
   https://github.com/johntime2005/rime-jev/actions/runs/37888288576
   at `aaf1cae50754253b47cf56fc3dc1b2a42559dc81`. The native patch/headers match
