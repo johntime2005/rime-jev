@@ -1,5 +1,56 @@
 # Native replacement handoff
 
+## Bridge-only transport update (2026-10-10)
+
+At approximately 10:05 local, restarted only the ordinary Jev bridge from this
+working tree, after local transport/worker regressions. The live status reports
+`providerTransport=alpn-h2-v1`, `connectionIdleMs=60000`, 100ms debounce and 4000ms
+provider timeout. The observed new PID was 11312; it is not a permanent service
+identifier. The configured provider/key/model and persisted daily cap were not
+changed. No registry, ACL, native binary, Lua/schema, skin, personal context
+allowlist or nasal-profile update was performed, and no application was closed.
+
+Production sources before this change, source hashes, 12 protected installation
+hashes, live numeric-only samples and the deployment receipt are saved in
+`runtime/transport-latency-20261010-095025`. The protected hashes include provider
+config, encrypted key, preferences, installation manifest, personal profile,
+skin, Lua/schema, registered/distribution DLLs, server and `rime.dll`. The usage
+ledger was deliberately not restored; synthetic calls and ordinary typing
+legitimately advanced it. Native-switch receipts and rollback guards are
+unchanged. This is a bridge deployment, not another native replacement.
+
+Real requests negotiated HTTP/2 and reused the connection after cancellation
+and a ten-second idle interval. Warm result-ready samples were 545/550/598ms;
+cold samples still exceeded a second. These are service/IPC samples, not a
+visible candidate-window or general latency acceptance. Tests and limitations
+are recorded in `VALIDATION.md`. The prior uncommitted cooperative-cancellation
+changes were retained and form part of the pre-change backup.
+
+## Zen-only personal context opt-in (2026-10-09)
+
+At 18:26, after explicit user approval, appended `zen.exe` to the personal
+`rime_ice_jev.custom.yaml` context list and deployed. No native binary, Lua,
+schema source, provider, key, threshold, preferences or skin was replaced.
+The original personal file bytes (including nasal rules) were retained before
+the appended patch; ten protected hashes remain unchanged. Normal test-word
+commits can update learned user frequency. The generic schema still has an
+empty default allowlist; the separate Pebrel adapter remains unchanged.
+
+Backup, `receipt.json` and hash-guarded `Rollback-ZenContext.ps1`:
+`%LOCALAPPDATA%/RimeJev/backups/zen-context-20261009-182641`.
+Installed custom SHA-256:
+`3F1AE1C891F351F40F19E2E3038882A98050EC89268D3B2C8DDC1722C343AC6A`.
+The rollback is prepared, not executed. It restores only the original personal
+custom and redeploys; it refuses later user edits. Existing native-switch
+rollback procedures and their Lua hash guards remain unchanged.
+
+Actual Zen URL-bar capture, visible manager/energy promotions and Space commits
+passed in a disposable profile. Scope tests and limitations, including early
+automation failures, are recorded in `ZEN.md`. Its temporary browser/remote
+control is closed. The ordinary bridge remains live with the original config;
+calls advanced 38 to 48 during synthetic testing. No existing browser tabs
+were modified. The empty-allowlist observations below predate this opt-in.
+
 ## Current continuation state (2026-10-09)
 
 Native replacement succeeded at 17:07 local after commit `9d7d526` fixed

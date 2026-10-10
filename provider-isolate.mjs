@@ -1,9 +1,10 @@
 import { Worker } from 'node:worker_threads';
 
 const failure = (code) => Object.assign(new Error(code), { code });
+export const CANCEL_GRACE_MS = 100;
 
-// Reuse healthy connections, but never depend on fetch honouring AbortSignal
-// to release the bridge's single request slot.
+// Reuse a worker after acknowledged cancellation, but bound even an ignored
+// abort independently of its event loop. The single request slot stays held.
 export class IsolatedProvider {
   constructor({ provider, apiKey, timeoutMs, workerUrl = new URL('./provider-worker.mjs', import.meta.url) }) {
     this.options = { provider, apiKey, timeoutMs };
@@ -12,7 +13,8 @@ export class IsolatedProvider {
     this.active = false;
     this.closed = false;
     this.sequence = 0;
-    this.metrics = { starts: 0, hardTimeouts: 0, cancellations: 0, failures: 0 };
+    this.metrics = { starts: 0, hardTimeouts: 0, cancellations: 0,
+      cooperativeCancellations: 0, hardCancellations: 0, failures: 0 };
   }
 
   warm() {
@@ -39,21 +41,30 @@ export class IsolatedProvider {
       worker = this.worker;
       const id = ++this.sequence;
       return await new Promise((resolve, reject) => {
-        let settled = false;
+        let settled = false, cancelling = false, cancelTimer;
         const finish = (error, result, terminate = false) => {
           if (settled) return;
           settled = true;
           destroy = terminate;
           clearTimeout(timer);
+          clearTimeout(cancelTimer);
           signal?.removeEventListener('abort', abort);
           worker.off('message', message);
           worker.off('error', crashed);
           worker.off('exit', exited);
+          if (cancelling) {
+            this.metrics[terminate ? 'hardCancellations' : 'cooperativeCancellations']++;
+            error = failure('CANCELLED'); result = undefined;
+          }
           if (error) reject(error); else resolve(result);
         };
         const abort = () => {
+          if (settled || cancelling) return;
+          cancelling = true;
           this.metrics.cancellations++;
-          finish(failure('CANCELLED'), null, true);
+          cancelTimer = setTimeout(() => finish(failure('CANCELLED'), null, true), CANCEL_GRACE_MS);
+          try { worker.postMessage({ id, type: 'cancel' }); }
+          catch { finish(failure('CANCELLED'), null, true); }
         };
         const crashed = () => {
           this.metrics.failures++;
@@ -62,6 +73,12 @@ export class IsolatedProvider {
         const exited = () => crashed();
         const message = (reply) => {
           if (reply?.id !== id) return;
+          if (cancelling && (reply.error === 'CANCELLED' || reply.result)) {
+            // A completed request can race its abort. Discard that result too;
+            // only acknowledgement that the worker is idle permits reuse.
+            finish(failure('CANCELLED'));
+            return;
+          }
           if (reply.error) {
             const code = /^[A-Z_]+$/.test(reply.error) ? reply.error : 'PROVIDER_WORKER_FAILED';
             finish(failure(code), null, true);
@@ -70,7 +87,7 @@ export class IsolatedProvider {
           } else crashed();
         };
         const timer = setTimeout(() => {
-          this.metrics.hardTimeouts++;
+          if (!cancelling) this.metrics.hardTimeouts++;
           finish(failure('TIMEOUT'), null, true);
         }, this.options.timeoutMs);
         signal?.addEventListener('abort', abort, { once: true });
@@ -82,8 +99,8 @@ export class IsolatedProvider {
         catch { crashed(); }
       });
     } finally {
-      // Await actual exit before allowing another request: no abandoned live
-      // requests or overlapping local transports after a timeout/cancellation.
+      // An unacknowledged abort, timeout or error still requires actual exit
+      // before the next request; a cooperative abort has already settled.
       try {
         if (destroy && worker) {
           await worker.terminate();

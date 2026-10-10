@@ -3,7 +3,8 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { providerConfig, CONTINUATION_PROMPT_VERSION } from './provider.mjs';
-import { IsolatedProvider } from './provider-isolate.mjs';
+import { IsolatedProvider, CANCEL_GRACE_MS } from './provider-isolate.mjs';
+import { TRANSPORT_VERSION, CONNECTION_IDLE_MS } from './provider-transport.mjs';
 import { contextProviderConfig, PebrelContextReader } from './context-pebrel.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -168,7 +169,8 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
       promptVersion: provider.allowNone ? CONTINUATION_PROMPT_VERSION : 'ime-completion-v3-object',
       auth: provider.auth, keyConfigured: Boolean(apiKey),
       callsToday: ledger.calls, callLimit, debounceMs, pollMs: POLL_MS, localMinIntervalMs: 0,
-      timeoutMs, providerIsolation: 'worker', providerWorker: client.metrics,
+      timeoutMs, providerIsolation: 'worker', providerCancelGraceMs: CANCEL_GRACE_MS, providerWorker: client.metrics,
+      providerTransport: TRANSPORT_VERSION, connectionIdleMs: CONNECTION_IDLE_MS,
       contextProvider: documentContext ? 'pebrel-codex' : 'none',
       cache: { ...cacheMetrics, ttlMs: cacheTtlMs, entries: cache.size },
       requestState: requestState ? { phase: requestState.phase, ageMs: Math.max(0, Date.now() - requestState.startedAt) } : null,

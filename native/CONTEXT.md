@@ -46,6 +46,12 @@ works. Games and remote terminals are unsupported unless their document
 interface is explicitly integrated and verified. UIA/IMM fallback and TUI
 editor-buffer plugins are intentionally not silently substituted.
 
+Local follow-up: the user explicitly enabled `zen.exe` on 2026-10-09 after a
+browser-context report. Specific URL-bar capture/commit and boundary checks
+are recorded in `ZEN.md`. This does not add a pre-approved app to the generic
+schema, certify every Zen control, or limit executable-wide consent to the
+URL bar. The separate Pebrel adapter is unchanged.
+
 ## Data flow and consistency
 
 1. The native frontend negotiates the context IPC capability. Old servers

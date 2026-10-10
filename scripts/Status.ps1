@@ -18,7 +18,19 @@ if ($status.providerIsolation -eq 'worker') {
     Write-Output ('Provider worker: deadline {0}ms; starts {1}, hard timeouts {2}, cancellations {3}, crashes/exits {4} (since bridge start).' -f
         $status.timeoutMs, $status.providerWorker.starts, $status.providerWorker.hardTimeouts,
         $status.providerWorker.cancellations, $status.providerWorker.failures)
-    Write-Output 'Timeout/cancellation retires the worker before another request; no automatic API retry. providerMs includes worker startup/teardown.'
+    if ($status.PSObject.Properties.Name -contains 'providerCancelGraceMs') {
+        Write-Output ('Cooperative cancellations {0}, forced cancellations {1}; acknowledgement grace {2}ms (within the request deadline).' -f
+            $status.providerWorker.cooperativeCancellations, $status.providerWorker.hardCancellations, $status.providerCancelGraceMs)
+        Write-Output 'Normal cancellation reuses the settled worker; an ignored abort or timeout retires it before the next request.'
+    } else {
+        Write-Output 'This bridge version retires the worker on every timeout/cancellation.'
+    }
+    Write-Output 'No automatic API retry. providerMs includes worker startup/teardown; reuse does not remove provider/network latency.'
+}
+if ($status.PSObject.Properties.Name -contains 'providerTransport') {
+    Write-Output ('Transport: {0}; idle connection limit {1}ms. HTTP/2 cancellation closes the stream, not its healthy TLS connection.' -f
+        $status.providerTransport, $status.connectionIdleMs)
+    Write-Output 'ALPN selects HTTP/2 or HTTP/1.1 before sending; no speculative API calls, redirects or POST retries.'
 }
 if ($status.lastResult) {
     Write-Output 'Last result (timings in ms; no input text recorded):'
@@ -37,6 +49,12 @@ if ($status.lastResult) {
     }
     Write-Output 'native = Lua regenerated candidates through native refresh; not proof of pixels rendered.'
     Write-Output 'not_observed = no adapter receipt yet; may be cancelled, still waiting, or an old/unsupported frontend.'
+    if ($status.lastResult.transport.protocol) {
+        $transport = $status.lastResult.transport
+        Write-Output ('Connection: {0}, reused={1}, connect={2}ms, response headers={3}ms, body={4}ms.' -f
+            $transport.protocol, $transport.reusedConnection, $transport.connectMs, $transport.headersMs, $transport.bodyMs)
+        Write-Output 'connectMs is included in headersMs, not an additional delay. The rest is not pure model-inference time.'
+    }
 }
 if ($status.cache) {
     Write-Output ('Exact in-memory cache: hits {0}, network attempts {1}, TTL {2}ms. No cross-session/focus/context reuse.' -f

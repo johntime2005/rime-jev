@@ -1,6 +1,73 @@
 # Native refresh validation status
 
-Last checked: 2026-10-09.
+Last checked: 2026-10-10.
+
+## Transport cancellation and connection reuse
+
+The initial inspection found the earlier cooperative-worker fix already live,
+with a 100ms debounce and no one-second local rate limit. Three explicit fixed
+synthetic requests took 1620/579/604ms from file publication to result readiness;
+provider times were 1503/461/491ms and local times 117/118/113ms. Two TLS-only
+connections to the configured origin took 562/423ms, negotiated `h2`, and sent
+no HTTP request or credentials. This isolates a substantial connection cost,
+not a pure model-inference measurement or a GUI latency trace.
+
+The worker now uses the built-in Node HTTP/2 client over verified TLS when ALPN
+selects `h2`. Cancellation waits for the current stream to close, keeping its
+healthy session instead of closing the whole connection as HTTP/1 cancellation
+does. HTTP/1-only endpoints use the same negotiated socket without an extra
+probe or POST replay. Idle sessions expire after 60 seconds; startup is still
+local-only. Stream/session failures and GOAWAY never retry a request. The
+existing worker deadline, single active request, cancellation grace, daily
+ledger, prompt, provider, thresholds and context validation remain unchanged.
+Responses are capped at 256 KiB, including bounded decompression. TLS hostname
+and certificate validation remain enabled; redirects remain disabled.
+
+After the bridge-only restart at approximately 10:05 local, three fixed
+synthetic requests took 1344/545/550ms (provider 1220/436/438ms). The first
+recorded 462ms connection time; the others reported `protocol=h2`,
+`reusedConnection=true`, `connectMs=0`. All promoted rank 2, with `source=provider`,
+not cache. A separate three-attempt probe warmed the connection, cancelled an
+active provider request at age 325ms, waited ten seconds, and then received the
+next result in 598ms. It reused the same connection and worker, with one
+cooperative cancellation, zero hard cancellations/timeouts and no retries.
+
+These are nine explicitly initiated synthetic attempts in total (three before,
+three after, three for cancellation), not nine necessarily billed calls. The
+cancelled call may still be billed. Ordinary user typing also advanced the
+ledger, so the overall counter delta is not a synthetic-probe count. No live
+input fields were read for these probes. The samples do not establish a robust
+speedup percentage, candidate-window latency, or a guarantee below one second:
+cold connection samples still exceeded a second, and warm response headers
+still took about 435-483ms before frontend polling and TSF scheduling.
+
+Local regressions include HTTP/2/HTTP/1 reuse, cancellation before headers and
+during body/TLS, GOAWAY, idle expiry, strict TLS, redirect refusal, no retries,
+size/decompression limits, malformed/truncated JSON and actual worker reuse plus
+hard-timeout recovery. All 73 Node tests, 11 Python tests, and isolated context and
+nasal-profile librime tests pass. Native GUI/native DLL tests were not rerun;
+neither DLL nor Lua changed. CI now includes every `tests/*.test.mjs` file and
+packaging includes `provider-transport.mjs`.
+
+Numeric-only live results, source backups and protected-file hashes are under
+`runtime/transport-latency-20261010-095025`. See `REPLACEMENT.md` for deployment.
+
+## Zen context follow-up
+
+At the user's explicit request, enabled only `zen.exe` in the personal custom
+patch and deployed at 18:26. The generic allowlist remains empty. A disposable
+profile of the installed Zen browser then supplied actual TSF prefix text;
+the candidate window showed the manager word first and two full Space-commit
+round trips passed. Changed-prefix, caret/suffix, deletion, different-meaning,
+Ctrl+F8/recovery and one ordinary password-field check also passed. No native,
+Lua, provider or threshold change was required. All 56 Node/11 Python tests and
+the isolated context/nasal modes pass.
+
+See `ZEN.md` for evidence, timings, early fragmented-automation failures,
+privacy scope and limitations. The existing user profile was not automated;
+this is not a general GUI stress/exit or model-accuracy certification. The
+empty installed allowlist statements in the next section describe the earlier
+inspection, before this follow-up.
 
 ## Installed continuation and browser-context gap
 

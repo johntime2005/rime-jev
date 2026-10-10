@@ -271,7 +271,7 @@ test('exact snapshot cache skips debounce and API budget but never crosses conte
       instance: bridge.instance, token: bridge.token, ...patch };
     await atomicWrite(path.join(bridge.runtime, 'inbox', `${r.id}.json`), JSON.stringify(r));
     await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', `${r.id}.res`), 'utf8'));
-    return waitFor(status, (s) => s.lastResult?.requestId === r.id);
+    return waitFor(status, (s) => s.lastResult?.requestId === r.id && s.requestState === null);
   };
   try {
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -488,6 +488,11 @@ test('live transport metrics distinguish same-first, promotion and a native adap
       assert.ok(result.lastResult.providerMs >= 50);
       assert.ok(result.lastResult.transport.headersMs >= 50);
       assert.ok(result.lastResult.transport.bodyMs >= 0);
+      assert.equal(result.providerTransport, 'alpn-h2-v1');
+      assert.equal(result.connectionIdleMs, 60000);
+      assert.equal(result.lastResult.transport.protocol, 'http/1.1');
+      assert.equal(result.lastResult.transport.reusedConnection, sequence > 1);
+      assert.ok(result.lastResult.transport.connectMs >= 0);
       assert.equal(result.lastResult.source, 'provider');
       assert.ok(result.lastResult.readyMs >= result.lastResult.providerMs + 20);
       assert.equal(result.pollMs, 20);
@@ -653,11 +658,16 @@ test('cancelling an active response retires it promptly without publishing a sta
     const cancelled = await waitFor(status, (s) => s.requestState === null && s.outcomes.cancelled === 1);
     assert.equal(cancelled.lastError, null);
     assert.equal(cancelled.lastResult, null);
+    assert.equal(cancelled.providerWorker.starts, 1);
+    assert.equal(cancelled.providerWorker.cooperativeCancellations, 1);
+    assert.equal(cancelled.providerWorker.hardCancellations, 0);
     await assert.rejects(fs.access(path.join(bridge.runtime, 'outbox', `${r.id}.res`)), { code: 'ENOENT' });
     const next = { ...r, id: 'cancel_2', sequence: 2 };
     await atomicWrite(path.join(bridge.runtime, 'inbox', `${next.id}.json`), JSON.stringify(next));
     const result = await waitFor(() => fs.readFile(path.join(bridge.runtime, 'outbox', `${next.id}.res`), 'utf8'));
     assertResponse(result, next, 'ok', '2,1,3');
+    const recovered = await waitFor(status, (s) => s.lastResult?.requestId === next.id);
+    assert.equal(recovered.providerWorker.starts, 1, 'normal cancellation must not cold-start the next worker');
     assert.equal(calls, 2);
   } finally {
     if (bridge) await bridge.stop();
@@ -712,6 +722,8 @@ test('cancelling an abort-ignoring worker closes its transport before the next r
     assert.equal(idle.lastError, null);
     assert.equal(idle.lastResult, null);
     assert.equal(idle.providerWorker.cancellations, 1);
+    assert.equal(idle.providerWorker.cooperativeCancellations, 0);
+    assert.equal(idle.providerWorker.hardCancellations, 1);
     assert.equal(idle.providerWorker.hardTimeouts, 0);
     await waitFor(() => local.sockets.size === 0);
     await assert.rejects(fs.access(path.join(bridge.runtime, 'outbox', `${r.id}.res`)), { code: 'ENOENT' });

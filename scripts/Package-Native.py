@@ -17,7 +17,7 @@ NATIVE_SOURCES = (
 )
 BRIDGE_SOURCES = (
     'LICENSE', 'bridge.mjs', 'context-pebrel.mjs', 'provider.mjs',
-    'provider-isolate.mjs', 'provider-worker.mjs',
+    'provider-isolate.mjs', 'provider-worker.mjs', 'provider-transport.mjs',
     'vendor/jev-keyboard/jev.mjs', 'vendor/jev-keyboard/ime-completion.mjs',
     'vendor/jev-keyboard/LICENSE', 'vendor/jev-keyboard/UPSTREAM.md',
 )

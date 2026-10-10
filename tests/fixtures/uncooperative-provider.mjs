@@ -1,11 +1,12 @@
 import '../../provider-worker.mjs';
+import { ProviderTransport } from '../../provider-transport.mjs';
 
-const fetch = globalThis.fetch;
-globalThis.fetch = async (url, options) => {
+const fetch = ProviderTransport.prototype.fetch;
+ProviderTransport.prototype.fetch = async function (url, options) {
   // Local HTTP only: exercise the production worker with a transport that
   // ignores AbortSignal, rather than another cooperative fetch timeout.
   if (new URL(url).hostname !== '127.0.0.1') throw new Error('Local fixture only');
-  const response = await fetch(url, { ...options, signal: undefined });
+  const response = await fetch.call(this, url, { ...options, signal: undefined });
   const fault = response.headers.get('x-test-fault');
   if (fault === 'fetch') return new Promise(() => {});
   if (fault === 'body') return { ok: true, json: () => new Promise(() => {}) };
