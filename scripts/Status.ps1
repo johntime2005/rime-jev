@@ -1,7 +1,7 @@
 $data = Join-Path $env:LOCALAPPDATA 'RimeJev'
 $statusFile = Join-Path $data 'status.json'
 if (-not (Test-Path -LiteralPath $statusFile)) { Write-Output 'Not started.'; return }
-$status = Get-Content -LiteralPath $statusFile -Raw | ConvertFrom-Json
+$status = Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json
 $status | Format-List
 $updated = if ($status.updatedAt -is [datetime]) { [DateTimeOffset]$status.updatedAt } else { [DateTimeOffset]::Parse($status.updatedAt) }
 if ([DateTimeOffset]::UtcNow - $updated -gt [TimeSpan]::FromSeconds(5)) {

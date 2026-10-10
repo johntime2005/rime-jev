@@ -4,6 +4,61 @@
 不安装 PIME，不替换 `rime.dll`，不需要 Visual Studio 或重新编译。
 当前机器的小狼毫 0.17.4 / librime 1.13.1 已内置 Lua 5.4.7。
 
+## 换电脑：下载、解压、双击安装
+
+**无需复制原来约 10 GB 的开发目录，也不需要安装 Git、Python、Visual Studio 或手动配置 Node。**
+到 [GitHub Releases](https://github.com/johntime2005/rime-jev/releases) 下载
+`rime-jev-v0.1.0-windows.1-windows-standard.zip`。仓库目前为私有，需登录有访问权限的 GitHub 账户；
+不要选择 GitHub 自动生成的 `Source code` 包作为普通安装包。
+
+1. 新电脑先安装 [Windows 小狼毫 / Rime](https://rime.im/)，确认原输入法能正常打字。
+2. 将 ZIP **完整解压**，双击 `Install.cmd`，不要在压缩包预览窗口内运行，也不要以另一个管理员账户运行。
+3. 等待依赖下载与方案部署。安装器自动识别本机 Rime 目录；缺少 Node / 雾凇时按固定版本下载并校验 SHA-256。
+4. 按配置向导填写这台电脑使用的服务端点、模型和密钥。自动请求与上文默认关闭，配置取消时仍可使用本地输入。
+5. 切换小狼毫，按 F4 选择“雾凇拼音 - Jev”；需要云端重排时再按 F8 开启。
+
+安装到 `%LOCALAPPDATA%\RimeJev\app\<内容哈希>`，开始菜单新增 **Rime Jev** 下的配置、状态、卸载、原生回退入口。
+安装成功后可以删除下载 ZIP 和解压目录；启动项不再依赖下载位置。标准安装不需要 UAC，不替换小狼毫 DLL / Server。
+重复运行新版 `Install.cmd` 会校验并更新，保留首次卸载备份；发现你改过受管理文件时停止，不强行覆盖。
+
+### 安装包选择与限制
+
+| 包 | 适用范围 | 双击入口 |
+| --- | --- | --- |
+| `windows-standard.zip` | 默认选择；Windows 10/11 x64，兼容带 Lua 的小狼毫，不替换系统组件 | `Install.cmd` |
+| `windows-native-x64.zip` | **实验版**；仅精确匹配的小狼毫 0.17.4 / librime 1.13.1 x64，增加停笔候选刷新 | `Install-Native.cmd` |
+
+标准版会异步请求，但原版小狼毫不能在停笔后主动刷新候选窗；按后续键或 Ctrl+Alt+F8 才能读取新结果。
+原生版需要输入 `INSTALL NATIVE` 确认并授权 UAC，先备份再替换匹配组件；不替换 `rime.dll`，不强制关闭你的应用。
+UAC 需由当前 Windows 账户授权；使用另一管理员账户的凭证不在支持范围内。
+原生功能仅覆盖 x64 TSF，不覆盖 x86 / IMM；安装后重新打开应用。它仍是实验版，不能把哈希校验或自动测试当成完整界面验收。
+已安装原生版时，先运行 `Rollback-Native.cmd`，再更新、重装或卸载，避免丢失原始回退链。
+ARM64 标准版有依赖下载路径，但尚未在 ARM64 机器实测；32 位 Windows 不支持。
+
+这是**按需联网安装包，不是离线全量备份**：首次可能下载 Node 和雾凇，依赖地址需能访问
+`nodejs.org` / `codeload.github.com`，编译词典还会占用本机空间。已有合适依赖时直接复用；不复制旧机器的编译缓存。
+安装器不覆盖现有皮肤、个人 custom、用户词库；雾凇文件若有冲突会中止，需先自行合并或安装雾凇。
+
+密钥受 Windows 当前账户 DPAPI 保护，**不能跨机器直接搬运**，新电脑需重新填写。
+安装包也不携带个人服务地址、用户词频、短语、鼻音配置、浏览器授权名单或输入记录。
+如需自己的词频/短语，请使用 Rime 自带的用户资料同步另行迁移；不要把整个 `%LOCALAPPDATA%\RimeJev` 上传 GitHub。
+
+故障处理：双击 `Status.cmd` 或开始菜单中的状态入口查看后台；使用 `Uninstall.cmd` 恢复安装前受管理文件。
+备份、加密密钥以及可能被其他方案使用的雾凇依赖会保留，卸载不自动清空个人目录。
+下载损坏会在哈希校验处停止；从可信 Release 重新下载即可，`.sha256` 用于检测损坏，不是发布者数字签名。
+
+高级只读检查（不下载、不部署、不更改输入法）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Windows.ps1 -Check
+```
+
+非标准路径可以添加 `-RimeUserDir "D:\RimeData" -WeaselRoot "D:\Apps\Weasel"`。
+实际部署必须使用小狼毫注册的用户目录；这些参数不迁移或修改小狼毫注册表。
+自动化可使用 `-NoConfigure`；测试隔离还可使用 `-NoDeploy -NoStart -NoAutostart -NoShortcuts`。
+
+## 开发历史（不是新电脑的安装状态）
+
 ### 连接复用与延迟（2026-10-10）
 
 后台现通过 TLS ALPN 协商 HTTP/2；服务不支持时在同一端点使用 HTTP/1.1，
@@ -148,10 +203,10 @@ Jev 协议客户端直接复用 MIT 项目
 回车保留现有值；相同端点允许保留已有密钥，更换端点必须输入新密钥。
 配置向导不会进行联网测试或自动发送打字内容。自动请求默认关闭，需要明确开启。F8 是持久化开关。
 
-安装（首次运行；配置文件会先备份）：
+安装请优先双击 `Install.cmd`，或运行下面的统一入口（首次运行先备份配置）：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install.ps1 -Autostart
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Windows.ps1
 ```
 
 密钥不要发给聊天助手。在你自己的 PowerShell 中运行：
@@ -299,9 +354,9 @@ node scripts/Check-Context.mjs
 - `%APPDATA%\Rime\default.custom.yaml`：仅追加一个可选方案；安装前原文件已备份。
 - `%LOCALAPPDATA%\RimeJev`：加密密钥、配置、状态、IPC 和备份，ACL 仅当前账户及 SYSTEM。
 - `config.json` 中的 `callLimit` 可调整（1–10000），修改后重启后台服务。
-- 如果安装时指定 `-Autostart`，创建当前用户的 `Rime Jev Bridge.lnk` 登录启动项，后台隐藏运行。
+- `Install.cmd` 默认创建当前用户的 `Rime Jev Bridge.lnk` 登录启动项，后台隐藏运行；可用 `-NoAutostart` 跳过。
 - 不改变 `weasel.custom.yaml` 皮肤、不覆盖旧的 `Rime\user` / `Rime\shared` 尝试、不删除用户词库。
-- 启动项引用本项目目录；不要在使用期间移动或删除本目录。
+- 新安装的启动项引用托管应用目录，下载目录可删除；旧版手动安装仍引用原项目目录，不要直接移动它。
 
 停止/启动：
 
@@ -330,6 +385,7 @@ python tests/native_rime.py --nasal-profile
 ```
 
 原生集成测试复制编译词典到 `runtime/native-*`，直接调用当前 `rime.dll`，不接触真实用户词库。
+现在测试结束会自动清理该次编译词典，仅保留小型诊断；确需调试时才使用 `--keep-build`。
 原生集成测试 provider 是明确的 **mock**，验证自动请求、开关、诊断/属性刷新置顶、翻页、取消和停服回退；
 Node 测试另用本地 HTTP 服务验证超时、取消及错误分类，不访问配置的真实服务。
 生产入口不提供 mock 模式。测试通过**不等于**真实 Jev API 已成功调用。
@@ -389,11 +445,33 @@ custom 文件由用户管理，更新/卸载不会覆盖或删除；回退本次
 ## 持久化和 GitHub
 
 代码在本目录的 Git 仓库；运行时目录、密钥、个人配置、词库和二进制不入库。
-更新安装文件用 `scripts/Update.ps1`，它先检查用户修改并备份，不覆盖旧卸载备份。
+普通用户下载 Release 即可；不需要复制 `runtime`、`upstream` 或 `.git`。
+`distribution-files.json` 采用文件白名单，打包工具拒绝私人配置、密钥、日志、用户词库和过大源码；
+每个 ZIP 附逐文件清单及整体 SHA-256。原生二进制只在 Release 中提供，并附许可证、补丁和来源记录。
+
+2026-10-10 的历史清理审计记录了 94 份重复测试编译目录，共回收 9.60 GiB；
+本轮继续回收隔离安装试验和一次性浏览器配置等缓存共 228.54 MiB，打包前工作区约 113.47 MiB。
+保留小型验证回执、源码 worktree、原生回退包，
+不触碰 `%APPDATA%\Rime`、`%LOCALAPPDATA%\RimeJev` 或已安装小狼毫。
+后续安全清理先预览，再按需执行；脚本检查绝对路径、链接、文件年龄和在用进程：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Publish-GitHub.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Clean-Runtime.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Clean-Runtime.ps1 -Apply -IncludeDisposableCaches -IncludeDownloads
 ```
 
-发布脚本通过 GitHub CLI 的浏览器登录，将当前仓库上传为**私有仓库**，默认名 `rime-jev`。
-不要求把 GitHub Token 发给助手；已有 origin 时拒绝覆盖。GitHub 未登录时不会声称已经上传。
+维护者发布（需要 Python 3.13、Git、已登录的 GitHub CLI；先测试、审查并提交源码）：
+
+```powershell
+node --test tests/*.test.mjs
+python -X utf8 -m unittest discover -s tests -p "test_*.py" -v
+git tag -a v0.1.0-windows.1 -m "Windows migration preview"
+python scripts/Package-Release.py --version v0.1.0-windows.1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Publish-GitHub.ps1 -Tag v0.1.0-windows.1 -Prerelease
+```
+
+后续版本使用新标签，不覆盖已发布资产。可选原生 ZIP 需先用 `scripts/Package-Native.py` 验证并准备匹配包，
+再给 `Package-Release.py` 传入 `--native-bundle <目录>`。详见 `native/README.md`。
+发布脚本先检查干净工作区、标签、源码提交和包哈希，推送已有分支/标签后上传 ZIP 与校验文件；不自动提交、强推或改仓库可见性。
+仓库不存在时才创建私有仓库，已有 origin 不匹配时拒绝继续。凭证使用本机 GitHub CLI 登录态，不写进脚本或仓库。
+`.github/workflows/windows-installer.yml` 在 Windows runner 上执行隔离回归并生成标准包，不部署真实输入法。

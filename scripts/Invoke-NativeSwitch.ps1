@@ -39,7 +39,7 @@ foreach ($file in $installation.files) {
     }
 }
 $installation | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
-& (Join-Path $PSScriptRoot 'Deploy.ps1')
+& (Join-Path $PSScriptRoot 'Deploy.ps1') -RimeUserDir $r.rimeUserDir -WeaselRoot $r.installRoot
 Start-Sleep -Seconds 2
 $running = @(Get-Process WeaselServer -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $server })
 if (-not $running.Count) { throw 'Files switched but server not running. Use rollback.' }

@@ -1,0 +1,32 @@
+name: Windows installer and portable package
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Provider, transport and bridge tests (local services only)
+        run: node --test tests/*.test.mjs
+      - name: Packaging and Windows PowerShell installer tests (isolated, no IME deployment)
+        run: python -X utf8 -m unittest discover -s tests -p "test_*.py" -v
+      - name: Build allowlisted standard ZIP
+        run: python scripts/Package-Release.py --version ci-${{ github.run_number }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rime-jev-windows-standard
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

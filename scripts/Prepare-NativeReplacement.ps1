@@ -1,10 +1,16 @@
-param([string]$Bundle = (Join-Path (Split-Path -Parent $PSScriptRoot) 'runtime\native-bundle'))
+param(
+    [string]$Bundle = (Join-Path (Split-Path -Parent $PSScriptRoot) 'runtime\native-bundle'),
+    [switch]$PassThru,
+    [string]$RimeUserDir,
+    [string]$WeaselRoot
+)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Installer.Common.ps1')
 $project = Split-Path -Parent $PSScriptRoot
-& python (Join-Path $PSScriptRoot 'Package-Native.py') --verify $Bundle
-if ($LASTEXITCODE -ne 0) { throw 'Bundle integrity verification failed.' }
-$root = [IO.Path]::GetFullPath((Get-ItemProperty 'HKLM:\Software\WOW6432Node\Rime\Weasel').WeaselRoot)
-$user = [IO.Path]::GetFullPath((Get-ItemProperty 'HKCU:\Software\Rime\Weasel').RimeUserDir)
+$null = Test-JevManifest $Bundle 'manifest.json'
+$paths = Get-JevPaths $RimeUserDir $WeaselRoot
+$root = $paths.Weasel
+$user = $paths.Rime
 $data = Join-Path $env:LOCALAPPDATA 'RimeJev'
 $clsid = 'Registry::HKEY_CLASSES_ROOT\CLSID\{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}\InprocServer32'
 $registeredDll = [IO.Path]::GetFullPath((Get-Item -LiteralPath $clsid).GetValue(''))
@@ -56,5 +62,6 @@ $receipt = [ordered]@{
     note='No installed files changed. Process enumeration can miss protected processes. Recheck immediately before replacement.'
 }
 $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $backup 'replacement.json') -Encoding UTF8
+if ($PassThru) { return (Join-Path $backup 'replacement.json') }
 $receipt | ConvertTo-Json -Depth 6
 Write-Output "Verified replacement backup: $backup"

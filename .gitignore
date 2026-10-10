@@ -1,5 +1,8 @@
 runtime/
 upstream/
+dist/
+exports/
+*.zip
 __pycache__/
 *.pyc
 *.log
@@ -18,3 +21,7 @@ installation.json
 *.dll
 *.exe
 *.pdb
+*.partial
+*.userdb/
+*.userdb.txt
+*.custom.yaml

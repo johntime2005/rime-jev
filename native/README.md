@@ -43,6 +43,22 @@ just to test it. Isolated native and TSF GUI tests remain release gates.
 Application restart is necessary to load a changed in-process DLL. No
 installation of these experimental binaries is performed by the build.
 
+## Windows release installer
+
+For another computer, download the `windows-native-x64.zip` release asset and
+read the root README before running `Install-Native.cmd`. It checks exact
+runtime compatibility, requires explicit confirmation and UAC, retains a
+verified rollback receipt, and provides `Rollback-Native.cmd`. Roll back an
+active native installation before updating, reinstalling or uninstalling.
+The standard ZIP and `Install.cmd` do not replace native binaries. Neither
+package includes personal keys, dictionaries, profiles or context consent.
+
+The native release is a preview, not completion of the GUI acceptance gates.
+Its binary provenance and corresponding-source patches are recorded in the
+bundle manifest and `RELEASE-NOTES.md`; the source/build scripts are in the
+same tagged Git repository. Rime Ice and portable Node are fetched separately
+if missing, with their licenses and pinned checksums.
+
 See `VALIDATION.md` for passing checks, the matched build provenance, and
 the remaining native release gates.
 

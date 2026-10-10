@@ -1,60 +1,91 @@
-param([switch]$NoDeploy, [switch]$Autostart)
-$ErrorActionPreference = 'Stop'
-$project = Split-Path -Parent $PSScriptRoot
-$rime = (Get-ItemProperty 'HKCU:\Software\Rime\Weasel' -ErrorAction Stop).RimeUserDir
-if (-not $rime) { $rime = Join-Path $env:APPDATA 'Rime' }
-$weasel = (Get-ItemProperty 'HKLM:\Software\WOW6432Node\Rime\Weasel' -ErrorAction Stop).WeaselRoot
-if (-not (Test-Path -LiteralPath (Join-Path $weasel 'data\rime_ice.schema.yaml'))) { throw 'Existing rime_ice schema required.' }
-Get-Command node.exe -ErrorAction Stop | Out-Null
-$data = Join-Path $env:LOCALAPPDATA 'RimeJev'
-New-Item -ItemType Directory -Path $data -Force | Out-Null
-# Restrict IPC, encrypted credentials and backups to this account and SYSTEM.
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-& icacls.exe $data /inheritance:r /grant:r "*${sid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not secure data directory.' }
-New-Item -ItemType Directory -Path (Join-Path $data 'runtime\inbox'),(Join-Path $data 'runtime\outbox'),(Join-Path $rime 'lua') -Force | Out-Null
-$manifestPath = Join-Path $data 'installation.json'
-if (Test-Path -LiteralPath $manifestPath) { throw 'Already installed. Use Uninstall.ps1 before reinstalling; existing backups were not overwritten.' }
-$backup = Join-Path $data ('backups\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-New-Item -ItemType Directory -Path $backup -Force | Out-Null
-$targets = @(
-    @{ relative = 'default.custom.yaml'; source = $null },
-    @{ relative = 'rime_ice_jev.schema.yaml'; source = 'rime_ice_jev.schema.yaml' },
-    @{ relative = 'lua\jev_windows.lua'; source = 'lua\jev_windows.lua' }
+param(
+    [switch]$NoDeploy,
+    [switch]$Autostart,
+    [switch]$NoStart,
+    [string]$RimeUserDir,
+    [string]$WeaselRoot
 )
-$manifest = @{ project = $project; rime = $rime; backup = $backup; files = @() }
-foreach ($target in $targets) {
-    $dest = Join-Path $rime $target.relative
-    $exists = Test-Path -LiteralPath $dest
-    $backupFile = Join-Path $backup ($target.relative.Replace('\', '__'))
-    if ($exists) { Copy-Item -LiteralPath $dest -Destination $backupFile }
-    $manifest.files += @{ relative = $target.relative; existed = $exists; backup = $backupFile }
-}
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Installer.Common.ps1')
+$project = Split-Path -Parent $PSScriptRoot
+$paths = Get-JevPaths $RimeUserDir $WeaselRoot
+$rime = $paths.Rime
+$data = $paths.Data
+$manifestPath = Join-Path $data 'installation.json'
+if (Test-Path -LiteralPath $manifestPath) { throw 'Already installed. Use Install.cmd to verify or update it; uninstall backups were not overwritten.' }
+$hasIce = (Test-Path -LiteralPath (Join-Path $rime 'rime_ice.schema.yaml') -PathType Leaf) -or
+    (Test-Path -LiteralPath (Join-Path $paths.Weasel 'data\rime_ice.schema.yaml') -PathType Leaf)
+if (-not $hasIce) { throw 'Rime Ice is required. Use Install.cmd to install its pinned dependencies automatically.' }
+if (-not (Get-JevNode)) { throw 'Node 22.17+ is required. Use Install.cmd for per-user dependency installation.' }
+
 $default = Join-Path $rime 'default.custom.yaml'
 $content = if (Test-Path -LiteralPath $default) { [IO.File]::ReadAllText($default) } else { "patch:`n" }
-if ($content -match 'rime_ice_jev|(?m)^\s*["'']?schema_list/\+') { throw 'Existing schema list extension needs manual merge; no Rime files changed.' }
-if ($content -notmatch '(?m)^patch:\s*$') { throw 'Cannot find patch:; no Rime files changed.' }
-# Keep every original byte except the appended additive schema-list patch.
-$content = $content.TrimEnd("`r", "`n") + "`n  # rime-jev: additive, original schema and UI remain unchanged.`n  `"schema_list/+`":`n    - {schema: rime_ice_jev}`n"
-[IO.File]::WriteAllText($default, $content, (New-Object Text.UTF8Encoding($false)))
+$patched = Add-JevSchemaPatch $content
+$targets = @(
+    @{ relative='default.custom.yaml'; source=$null },
+    @{ relative='rime_ice_jev.schema.yaml'; source='rime_ice_jev.schema.yaml' },
+    @{ relative='lua\jev_windows.lua'; source='lua\jev_windows.lua' }
+)
 foreach ($target in $targets) {
-    if ($target.source) { Copy-Item -LiteralPath (Join-Path $project $target.source) -Destination (Join-Path $rime $target.relative) }
+    $dest = Join-JevPath $rime $target.relative
+    Assert-JevPlainPath $dest
+    if ($target.source -and -not (Test-Path -LiteralPath (Join-JevPath $project $target.source) -PathType Leaf)) {
+        throw "Missing adapter source: $($target.source)"
+    }
 }
-foreach ($file in $manifest.files) { $file.installedHash = (Get-FileHash -LiteralPath (Join-Path $rime $file.relative) -Algorithm SHA256).Hash }
-$manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
-if (-not (Test-Path -LiteralPath (Join-Path $data 'config.json'))) { '{"callLimit":200}' | Set-Content -LiteralPath (Join-Path $data 'config.json') -Encoding Ascii }
-if ($Autostart) {
-    $startup = [Environment]::GetFolderPath('Startup')
-    $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startup 'Rime Jev Bridge.lnk'))
-    $link.TargetPath = (Get-Command powershell.exe).Source
-    $link.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + (Join-Path $PSScriptRoot 'Start-Bridge.ps1') + '" -Foreground'
-    $link.WorkingDirectory = $project
-    $link.WindowStyle = 7
-    $link.Save()
+Initialize-JevData $data
+$backup = Join-Path $data ('backups\install-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+New-Item -ItemType Directory -Path $backup -Force | Out-Null
+$manifest = @{ format=2; project=$project; rime=$rime; weasel=$paths.Weasel; backup=$backup; files=@() }
+foreach ($target in $targets) {
+    $dest = Join-JevPath $rime $target.relative
+    $exists = Test-Path -LiteralPath $dest -PathType Leaf
+    $backupFile = Join-Path $backup ($target.relative.Replace('\', '__'))
+    if ($exists) { Copy-Item -LiteralPath $dest -Destination $backupFile }
+    $originalHash = if ($exists) { (Get-FileHash -LiteralPath $backupFile -Algorithm SHA256).Hash } else { $null }
+    $manifest.files += @{ relative=$target.relative; existed=$exists; backup=$backupFile; originalHash=$originalHash }
 }
-& (Join-Path $PSScriptRoot 'Start-Bridge.ps1')
-if (-not $NoDeploy) {
-    & (Join-Path $PSScriptRoot 'Deploy.ps1')
+$startupLink = Join-Path ([Environment]::GetFolderPath('Startup')) 'Rime Jev Bridge.lnk'
+$hadStartup = Test-Path -LiteralPath $startupLink
+if ($Autostart -and $hadStartup) { Copy-Item -LiteralPath $startupLink -Destination (Join-Path $backup 'startup.lnk') }
+$startAttempted = $false
+try {
+    New-Item -ItemType Directory -Path (Join-Path $rime 'lua'),(Join-Path $data 'runtime\inbox'),(Join-Path $data 'runtime\outbox') -Force | Out-Null
+    [IO.File]::WriteAllText($default, $patched, (New-Object Text.UTF8Encoding($false)))
+    foreach ($target in $targets) {
+        if ($target.source) { Copy-Item -LiteralPath (Join-JevPath $project $target.source) -Destination (Join-JevPath $rime $target.relative) }
+    }
+    foreach ($file in $manifest.files) {
+        $file.installedHash = (Get-FileHash -LiteralPath (Join-JevPath $rime $file.relative) -Algorithm SHA256).Hash
+    }
+    Write-JevJson $manifestPath $manifest
+    if (-not (Test-Path -LiteralPath (Join-Path $data 'config.json'))) { Write-JevJson (Join-Path $data 'config.json') @{ callLimit=200 } }
+    $preferences = Join-Path $data 'runtime\preferences'
+    if (-not (Test-Path -LiteralPath $preferences)) { [IO.File]::WriteAllText($preferences, "JEVPREF1`n0`n0`n", [Text.Encoding]::ASCII) }
+    if (-not $NoDeploy) { & (Join-Path $PSScriptRoot 'Deploy.ps1') -RimeUserDir $rime -WeaselRoot $paths.Weasel }
+    if ($Autostart) { Set-JevAutostart $project }
+    if (-not $NoStart) {
+        $startAttempted = $true
+        & (Join-Path $PSScriptRoot 'Start-Bridge.ps1')
+    }
+} catch {
+    $failure = $_
+    if ($startAttempted) { try { & (Join-Path $PSScriptRoot 'Stop-Bridge.ps1') } catch { Write-Warning $_.Exception.Message } }
+    foreach ($file in $manifest.files) {
+        $dest = Join-JevPath $rime $file.relative
+        if ($file.existed) { Copy-Item -LiteralPath $file.backup -Destination $dest -Force }
+        elseif (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Force }
+    }
+    if ($Autostart) {
+        if ($hadStartup) { Copy-Item -LiteralPath (Join-Path $backup 'startup.lnk') -Destination $startupLink -Force }
+        elseif (Test-Path -LiteralPath $startupLink) { Remove-Item -LiteralPath $startupLink -Force }
+    }
+    if (Test-Path -LiteralPath $manifestPath) { Remove-Item -LiteralPath $manifestPath -Force }
+    if (-not $NoDeploy) {
+        try { & (Join-Path $PSScriptRoot 'Deploy.ps1') -RimeUserDir $rime -WeaselRoot $paths.Weasel }
+        catch { Write-Warning "Source files restored; redeploy manually. Backup: $backup" }
+    }
+    throw $failure
 }
 Write-Output "Installed. Backup: $backup"
-Write-Output 'F4 -> rime_ice_jev. F8 toggles automatic requests; Ctrl+Alt+F8 diagnostic refresh. Ctrl+F8 clears context.'
+Write-Output 'F4 -> rime_ice_jev. F8 toggles automatic requests (off by default); Ctrl+Alt+F8 performs diagnostic refresh.'

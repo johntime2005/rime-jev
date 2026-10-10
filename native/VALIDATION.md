@@ -2,6 +2,36 @@
 
 Last checked: 2026-10-10.
 
+## Windows migration package and cleanup
+
+The resumed migration work verifies the existing 94-target cleanup audit
+(10,308,484,307 bytes, 9.60 GiB reclaimed). A further guarded cleanup removed
+228.54 MiB of disposable migration dictionaries, the explicitly synthetic Zen
+probe profile, and the SHA-256-verified upstream download. Small test receipts,
+source worktrees, binary bundles and rollback backups remain. The workspace
+was 113.47 MiB before adding release output. Thirteen protected installed
+files still match the prior migration hashes, including provider configuration,
+DPAPI key, preferences, skin, personal custom, Lua/schema and Weasel binaries.
+No installed input-method file was changed or deployed during this work.
+
+Local validation: 73 Node tests pass using only local services; 30 Python tests
+pass covering Windows PowerShell 5.1 install/update/uninstall, packaging and
+cleanup guards. Tests cover spaces/CJK paths, read-only preflight, preserved
+personal data, modified-file/backup refusal, deletion of the download folder,
+offline bridge start/stop, corrupt paths/archives, native rollback-receipt
+preservation, staging cleanup on dependency conflict, active-process skips,
+linked-cache refusal, preview and WhatIf. Native-context Lua regression passes
+with mock IPC and no provider calls; compiled test indices are removed on exit.
+
+The real-librime migration smoke also passes in disposable data with system Node
+hidden: the pinned portable Node download verifies and runs; pinned Rime Ice,
+English, radical and Jev schemas compile; the Jev scheme selects and offers the
+expected local candidate. Global defaults are not replaced, no real user DB is
+opened and no production cloud request is sent. All generated smoke data is
+removed after the child process releases librime mappings. This is not an
+on-screen deployment test, ARM64 test, native UAC/rollback execution, or broad
+different-computer acceptance. Those limitations remain explicit in the release.
+
 ## Transport cancellation and connection reuse
 
 The initial inspection found the earlier cooperative-worker fix already live,

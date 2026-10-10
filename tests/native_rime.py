@@ -46,12 +46,10 @@ class Commit(C.Structure):
     _fields_ = [('data_size', C.c_int), ('text', C.c_char_p)]
 
 
-def run(typing_profile=False, nasal_profile=False, pebrel_context=False, context_test=False):
-    project = Path(__file__).resolve().parents[1]
+def _run(project, root, typing_profile=False, nasal_profile=False, pebrel_context=False, context_test=False):
     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\WOW6432Node\Rime\Weasel') as k:
         install = Path(winreg.QueryValueEx(k, 'WeaselRoot')[0])
     user = Path(os.environ['APPDATA']) / 'Rime'
-    root = project / 'runtime' / ('native-' + uuid.uuid4().hex[:8])
     data, bridge_root = root / 'rime', root / 'bridge'
     data.mkdir(parents=True)
     (data / 'lua').mkdir()
@@ -597,6 +595,22 @@ def run(typing_profile=False, nasal_profile=False, pebrel_context=False, context
         child.wait(timeout=5)
 
 
+def run(typing_profile=False, nasal_profile=False, pebrel_context=False, context_test=False, keep_build=False):
+    project = Path(__file__).resolve().parents[1]
+    runtime = (project / 'runtime').resolve()
+    root = runtime / ('native-' + uuid.uuid4().hex[:8])
+    try:
+        return _run(project, root, typing_profile, nasal_profile, pebrel_context, context_test)
+    finally:
+        # Keep the small diagnostic records, not another 100 MiB compiled dictionary copy.
+        build = root / 'rime/build'
+        if not keep_build and build.exists():
+            if not build.resolve().is_relative_to(runtime) or any(
+                    p.is_symlink() or p.is_junction() for p in (root, root / 'rime', build, *build.rglob('*'))):
+                raise RuntimeError('Refusing to clean a linked test build directory.')
+            shutil.rmtree(build)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     profiles = parser.add_mutually_exclusive_group()
@@ -604,5 +618,6 @@ if __name__ == '__main__':
     profiles.add_argument('--nasal-profile', action='store_true')
     profiles.add_argument('--pebrel-context', action='store_true')
     profiles.add_argument('--context', action='store_true')
+    parser.add_argument('--keep-build', action='store_true', help='Keep compiled dictionaries for debugging (about 100 MiB per run).')
     args = parser.parse_args()
-    run(args.typing_profile, args.nasal_profile, args.pebrel_context, args.context)
+    run(args.typing_profile, args.nasal_profile, args.pebrel_context, args.context, args.keep_build)

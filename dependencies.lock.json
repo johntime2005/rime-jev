@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "node": {
+    "version": "22.23.3",
+    "minimum": "22.17.0",
+    "x64": {
+      "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-x64.zip",
+      "sha256": "2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71"
+    },
+    "arm64": {
+      "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-arm64.zip",
+      "sha256": "33dad22e4cef5ee8f9fbb1b0d037fdacd0e56d12a4580f0d63f68b894deab535"
+    }
+  },
+  "rimeIce": {
+    "revision": "da1fbe602e38f26db846fa10120ee64c2b0324c0",
+    "url": "https://codeload.github.com/iDvel/rime-ice/zip/da1fbe602e38f26db846fa10120ee64c2b0324c0",
+    "sha256": "ad71f7d8a63f8ae2d29a745d4be87be8827598dec5a18fc23009869fb72329c0",
+    "license": "GPL-3.0-only"
+  },
+  "native": {
+    "architecture": "x64",
+    "weaselVersion": "0.17.4",
+    "librimeVersion": "1.13.1",
+    "rimeDllSha256": "2d8f1bc3737635a11d9fb1bfca4dc9e70533633930a8a0142a81ca879c39c45b"
+  }
+}
