@@ -162,7 +162,13 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
     nativeApplied: 0, otherApplied: 0, unacknowledged: 0 };
   const beat = async () => {
     if (Date.now() - infoAt >= 1000) {
-      await atomicWrite(path.join(runtime, 'bridge.info'), `JEVWIN1\n${instance}\n${token}\n${mode}\n${Math.floor(Date.now() / 1000)}\n`);
+      // Guarded like status.json below: an antivirus/reader holding this file
+      // must never kill the loop and strand every pending request.
+      try { await atomicWrite(path.join(runtime, 'bridge.info'), `JEVWIN1\n${instance}\n${token}\n${mode}\n${Math.floor(Date.now() / 1000)}\n`); }
+      catch (error) {
+        if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error;
+        statusWriteFailures++;
+      }
       infoAt = Date.now();
     }
     const status = JSON.stringify({ mode, pid: process.pid,
@@ -447,7 +453,11 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
               const filename = path.join(runtime, folder, name);
               try {
                 if ((await fs.stat(filename)).mtimeMs < Date.now() - 15000) await fs.unlink(filename);
-              } catch (e) { if (e.code !== 'ENOENT') throw e; }
+              } catch (e) {
+                // Stale-file cleanup is best effort; a transient sharing
+                // violation must not kill the bridge's main loop.
+                if (e.code !== 'ENOENT' && !['EPERM', 'EACCES', 'EBUSY'].includes(e.code)) throw e;
+              }
             }
           }
           for (const [key, value] of seen) if (Date.now() - value.at > 30000) seen.delete(key);

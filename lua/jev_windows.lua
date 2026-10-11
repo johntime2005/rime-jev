@@ -128,6 +128,7 @@ local function clear(state, cause)
   state.snapshot = nil
   state.context_visible = nil
   state.context_reason = cause
+  state.context_pending_since = nil
   state.cache_epoch = state.cache_epoch + 1
   state.attempted, state.paused = nil, nil
   -- Manual suppression lasts until the composition ends, not until cleanup.
@@ -207,6 +208,18 @@ local function prepare(buffer, env)
   local snap = { input = ctx.input, caret = ctx.caret_pos,
     preedit = buffer[1] and buffer[1].preedit or ctx.input, candidates = {} }
   local doc = document(ctx:get_property('jev_context')) or { quality = 'unavailable', stamp = '', text = '' }
+  -- The native TSF chain republishes the real snapshot within ~300ms. Some
+  -- hosts never run it (foreground PID mismatch, failed edit session), which
+  -- would freeze submit/consume on the pending wire forever. Fall back after
+  -- a bounded wait so typing still ranks without document context.
+  if doc.quality == 'pending' then
+    if not state.context_pending_since then state.context_pending_since = os.time() end
+    if os.time() - state.context_pending_since >= 2 then
+      doc = { quality = 'unavailable', stamp = '', text = '' }
+    end
+  else
+    state.context_pending_since = nil
+  end
   local app_name = ctx:get_property('client_app'):lower()
   if not state.use_context or state.context_suppressed or not state.context_apps[app_name] then
     doc.text = ''
@@ -344,6 +357,7 @@ function M.processor.init(env)
         cancel(state, nil, 'document_changed')
         state.snapshot, state.attempted = nil, nil
         state.context_wire, state.context_dirty = wire, true
+        state.context_pending_since = wire == 'pending' and os.time() or nil
         state.cache_epoch = state.cache_epoch + 1
       end
     elseif name == 'jev_focus_epoch' then
