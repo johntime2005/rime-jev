@@ -66,6 +66,187 @@ foreach ($file in (Get-ChildItem -LiteralPath (Join-Path $env:JEV_SOURCE 'script
 }
 """)
 
+    def shadow_security_module(self):
+        # Reproduce the PS7/intermediate-process search order even without PS7.
+        modules = self.root / 'foreign-modules'
+        security = modules / 'Microsoft.PowerShell.Security'
+        security.mkdir(parents=True)
+        (security / 'ForeignSecurity.psm1').write_text("throw 'FOREIGN_SECURITY_MUST_NOT_LOAD'\n", encoding='ascii')
+        (security / 'Microsoft.PowerShell.Security.psd1').write_text("""@{
+ModuleVersion='99.0.0'
+RootModule='ForeignSecurity.psm1'
+FunctionsToExport=@('ConvertFrom-SecureString','ConvertTo-SecureString')
+CmdletsToExport=@()
+AliasesToExport=@()
+}
+""", encoding='ascii')
+        system_modules = POWERSHELL.parent / 'Modules'
+        self.env['PSModulePath'] = str(modules) + os.pathsep + str(system_modules)
+
+    def test_endpoint_normalization_preserves_api_routes(self):
+        self.command("""
+. (Join-Path $env:JEV_SOURCE 'scripts/Installer.Common.ps1')
+$cases=@{
+    'https://emrank.tech/v1/decisions'='https://emrank.tech/v1/decisions'
+    'https://relay.example/custom/decisions'='https://relay.example/custom/decisions'
+    'https://relay.example/v1/systemone/'='https://relay.example/v1/systemone/'
+    'relay.example'='https://relay.example/v1/systemone'
+    'https://relay.example/v1'='https://relay.example/v1/systemone'
+    'https://relay.example/v1/'='https://relay.example/v1/systemone'
+    'localhost:8080'='http://localhost:8080/v1/systemone'
+    'http://[::1]:8080/v1/decisions'='http://[::1]:8080/v1/decisions'
+}
+foreach ($inputValue in $cases.Keys) {
+    if ((Resolve-JevEndpoint $inputValue).AbsoluteUri -cne ([Uri]$cases[$inputValue]).AbsoluteUri) {
+        throw ('Endpoint route changed: ' + $inputValue)
+    }
+}
+foreach ($inputValue in @('http://remote.example/v1/decisions','ftp://remote.example',
+    'https://user:secret@remote.example','https://remote.example?key=secret','https://remote.example#fragment')) {
+    $rejected=$false
+    try { $null=Resolve-JevEndpoint $inputValue } catch { $rejected=$true }
+    if (-not $rejected) { throw 'Unsafe endpoint was accepted' }
+}
+""")
+
+    def test_configure_keeps_explicit_decisions_endpoint_and_model(self):
+        self.stage_key_entrypoint('Configure.ps1')
+        (self.data / 'runtime').mkdir()
+        for endpoint in ('https://emrank.tech/v1/decisions', 'https://relay.example/custom/decisions'):
+            with self.subTest(endpoint=endpoint):
+                original = {'provider': {'endpoint': endpoint, 'model': 'typesafe/jev-latest'}, 'callLimit': 123}
+                (self.data / 'config.json').write_text(json.dumps(original), encoding='utf-8')
+                (self.data / 'runtime/preferences').write_bytes(b'JEVPREF1\n1\n0\n')
+                self.command("""
+function Read-Host {
+    param([string]$Prompt,[switch]$AsSecureString)
+    if ($AsSecureString) {
+        $key=New-Object Security.SecureString
+        $key.AppendChar([char]120)
+        return $key
+    }
+    return ''
+}
+& (Join-Path $env:JEV_KEY_SCRIPTS 'Configure.ps1')
+""")
+                config = json.loads((self.data / 'config.json').read_text(encoding='utf-8'))
+                self.assertEqual(config['provider']['endpoint'], endpoint)
+                self.assertEqual(config['provider']['model'], 'typesafe/jev-latest')
+
+    def test_status_defaults_to_concise_output_and_retains_detailed_mode(self):
+        status = {'mode': 'live', 'endpoint': 'https://relay.example/v1/decisions', 'model': 'typesafe/jev-latest',
+                  'updatedAt': '2099-01-01T00:00:00Z', 'callsToday': 0, 'callLimit': 123,
+                  'requestState': None, 'lastResult': None, 'lastError': None,
+                  'providerTransport': 'alpn-h2-v1', 'connectionIdleMs': 60000,
+                  'cache': {'hits': 0, 'misses': 0, 'ttlMs': 15000}}
+        (self.data / 'status.json').write_text(json.dumps(status), encoding='utf-8')
+        for detailed in (False, True):
+            with self.subTest(detailed=detailed):
+                flags = ' -Detailed' if detailed else ''
+                output = self.command("& (Join-Path $env:JEV_SOURCE 'scripts/Status.ps1')" + flags)
+                self.assertIn('https://relay.example/v1/decisions', output)
+                if detailed:
+                    self.assertIn('alpn-h2-v1', output)
+                    self.assertIn('ALPN selects', output)
+                else:
+                    self.assertNotIn('ALPN selects', output)
+                    self.assertNotIn('last heartbeat', output)
+                    self.assertIn('0/123', output)
+
+    def stage_key_entrypoint(self, name):
+        scripts = self.root / 'key-entrypoints/scripts'
+        scripts.mkdir(parents=True, exist_ok=True)
+        for source in (name, 'Installer.Common.ps1'):
+            shutil.copy2(ROOT / 'scripts' / source, scripts / source)
+        for source in ('Stop-Bridge.ps1', 'Start-Bridge.ps1', 'Status.ps1'):
+            (scripts / source).write_text('# No live bridge or network in configuration tests.\n', encoding='ascii')
+        self.env['JEV_KEY_SCRIPTS'] = str(scripts)
+
+    def test_dpapi_uses_current_host_module_despite_foreign_module_path(self):
+        self.shadow_security_module()
+        self.command("""
+$failed=$false
+try {
+    $key=New-Object Security.SecureString
+    $key.AppendChar([char]120)
+    $null=ConvertFrom-SecureString $key
+} catch { $failed=$true }
+if (-not $failed) { throw 'Fixture did not reproduce failed Security autoload' }
+. (Join-Path $env:JEV_SOURCE 'scripts/Installer.Common.ps1')
+$before=$env:PSModulePath
+Import-JevSecurityModule
+if ($env:PSModulePath -cne $before) { throw 'Module search paths were modified' }
+foreach ($name in @('ConvertFrom-SecureString','ConvertTo-SecureString')) {
+    $command=Get-Command $name
+    if (-not $command.Module.Path.StartsWith($PSHOME,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'DPAPI command did not resolve to the current PowerShell host'
+    }
+}
+$encrypted=ConvertFrom-SecureString $key
+$restored=ConvertTo-SecureString $encrypted
+if ($restored.Length -ne 1) { throw 'Synthetic DPAPI roundtrip failed' }
+""")
+
+    def test_configure_encrypts_key_and_preserves_preferences_with_foreign_module_path(self):
+        self.shadow_security_module()
+        self.stage_key_entrypoint('Configure.ps1')
+        (self.data / 'runtime').mkdir()
+        original = {'provider': {'endpoint': 'https://relay.example/v1/systemone', 'model': 'jev-latest'},
+                    'callLimit': 123}
+        for automatic in ('0', '1'):
+            with self.subTest(automatic=automatic):
+                (self.data / 'config.json').write_text(json.dumps(original), encoding='utf-8')
+                preferences = 'JEVPREF1\n' + automatic + '\n1\n'
+                (self.data / 'runtime/preferences').write_bytes(preferences.encode('ascii'))
+                self.command("""
+function Read-Host {
+    param([string]$Prompt,[switch]$AsSecureString)
+    if ($AsSecureString) {
+        $key=New-Object Security.SecureString
+        foreach ($character in 'fixture-not-a-real-key'.ToCharArray()) { $key.AppendChar($character) }
+        return $key
+    }
+    return ''
+}
+& (Join-Path $env:JEV_KEY_SCRIPTS 'Configure.ps1')
+$path=Join-Path $env:LOCALAPPDATA 'RimeJev/key.dpapi'
+$encrypted=[IO.File]::ReadAllText($path).Trim()
+if ($encrypted.Contains('fixture-not-a-real-key')) { throw 'Key was stored as plaintext' }
+$key=ConvertTo-SecureString $encrypted
+if ($key.Length -ne 22) { throw 'Configured key did not decrypt' }
+""")
+                self.assertEqual((self.data / 'runtime/preferences').read_bytes(), preferences.encode('ascii'))
+                config = json.loads((self.data / 'config.json').read_text(encoding='utf-8'))
+                self.assertEqual(config['provider']['endpoint'], original['provider']['endpoint'])
+                self.assertEqual(config['callLimit'], 123)
+
+    def test_set_key_and_bridge_decrypt_with_foreign_module_path(self):
+        self.install()
+        self.shadow_security_module()
+        self.stage_key_entrypoint('Set-Key.ps1')
+        self.command("""
+function Read-Host {
+    param([string]$Prompt,[switch]$AsSecureString)
+    if ($AsSecureString) {
+        $key=New-Object Security.SecureString
+        foreach ($character in 'fixture-not-a-real-key'.ToCharArray()) { $key.AppendChar($character) }
+        return $key
+    }
+    return 'YES'
+}
+& (Join-Path $env:JEV_KEY_SCRIPTS 'Set-Key.ps1')
+""")
+        app = Path(self.manifest()['project'])
+        self.env['JEV_APP'] = str(app)
+        self.command("""
+try {
+    & (Join-Path $env:JEV_APP 'scripts/Start-Bridge.ps1')
+    $status=Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA 'RimeJev/status.json') -Raw | ConvertFrom-Json
+    if ($status.mode -ne 'live' -or -not $status.keyConfigured) { throw 'Bridge did not decrypt the stored key' }
+    if ($status.callsToday -ne 0) { throw 'Startup made an API request' }
+} finally { & (Join-Path $env:JEV_APP 'scripts/Stop-Bridge.ps1') }
+""")
+
     def test_read_only_preflight_then_repeat_install_update_and_uninstall(self):
         (self.data / 'config.json').write_text('{"callLimit":123}', encoding='ascii')
         (self.data / 'key.dpapi').write_text('opaque-private-placeholder', encoding='ascii')

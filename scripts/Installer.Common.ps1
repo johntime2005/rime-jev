@@ -1,4 +1,39 @@
 # Shared by the source checkout and the allowlisted release package. PowerShell 5.1 compatible.
+function Import-JevSecurityModule {
+    # A PS7 -> cmd/Python -> Windows PowerShell launch can inherit PS7 modules.
+    # Pin DPAPI cmdlets to this host without changing user/system module paths.
+    $manifest = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+    Import-Module -Name $manifest -Global -ErrorAction Stop
+}
+
+function Test-JevLocalEndpoint([Uri]$Uri) {
+    # .NET Framework expands ::1 whereas modern .NET keeps its short form.
+    return $Uri.Host -in @('localhost', '127.0.0.1', '[::1]', '::1', '[0000:0000:0000:0000:0000:0000:0000:0001]')
+}
+
+function Resolve-JevEndpoint([string]$Endpoint) {
+    $value = $Endpoint.Trim()
+    if ($value -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') {
+        $scheme = if ($value -match '^(localhost|127\.0\.0\.1|\[::1\])(?::|/|$)') { 'http://' } else { 'https://' }
+        $value = $scheme + $value
+    }
+    $uri = $null
+    if (-not [Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$uri)) { throw 'Invalid service endpoint.' }
+    $localHost = Test-JevLocalEndpoint $uri
+    if (-not $uri.Host -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or
+        ($uri.Scheme -ne 'https' -and -not ($localHost -and $uri.Scheme -eq 'http'))) {
+        throw 'Use HTTPS or local HTTP, without URL credentials/query/fragment.'
+    }
+    # Only expand base URLs. Explicit paths such as /v1/decisions are API routes,
+    # not prefixes to which /v1/systemone may be appended.
+    if ($uri.AbsolutePath -in @('', '/', '/v1', '/v1/')) {
+        $builder = New-Object UriBuilder($uri)
+        $builder.Path = '/v1/systemone'
+        $uri = $builder.Uri
+    }
+    return $uri
+}
+
 function Get-JevFullPath([string]$Path) {
     $full = [IO.Path]::GetFullPath($Path)
     if (-not $full.Contains('~')) { return $full }

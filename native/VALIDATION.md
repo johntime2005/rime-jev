@@ -679,3 +679,36 @@ local reads measured approximately 0.9-1.0s and the safety re-read adds another
 similar interval. This fixes the source of context but is NOT a low-latency
 solution. Requests already sent before a later invalidation may still be billed.
 A native bounded composer API in Pebrel is the appropriate next optimization.
+## Explicit all-application context (2026-10-11)
+
+The previous Lua adapter treated every allowlist entry literally, so `*` did
+not authorize applications. A shared `context_allowed` check now recognizes
+only a standalone `*`, for both native read consent and document forwarding.
+Empty application names remain denied; partial globs are not implemented.
+The distributed schema still has an empty allowlist.
+
+After explicit user authorization, the personal profile was created with
+`jev_windows/context_apps: ["*"]` and deployed. Compiled configuration and
+installed Lua hashes were verified. Nine protected hashes, including provider,
+encrypted key, preferences, schema, default configuration and native binaries,
+remain unchanged. No native binary was replaced and no application was closed.
+
+Validation:
+
+- 75 Node tests pass; 32 Python tests complete with 30 passes and two skips.
+- Isolated ordinary, nasal, exact-allowlist and wildcard librime modes pass.
+- Both policies test case-insensitive names, unknown-name rejection, forwarding,
+  sensitive-input blocking, preference gates, Ctrl+F8 suppression, manual
+  selection and stale-result rejection. Only `*` authorizes a partial-glob test
+  application's name; `partial-*.exe` remains a literal entry.
+- The first ordinary integration run failed because it assumed seven candidates
+  while this installation uses five. The fixture now explicitly sets seven
+  candidates in its isolated schema; the real user's page size is unchanged.
+- Tests use local/mock providers and make no real provider calls. Actual GUI
+  context capture and ranking of the user's screenshot have not been retested.
+
+Deployment backup and numeric receipt:
+`%LOCALAPPDATA%/RimeJev/backups/all-app-context-20261011-155826`.
+The hash-guarded `Rollback-AllAppContext.ps1 -Check` preflight passes; actual
+rollback has not run. Restore this adapter layer before invoking the older
+manual native rollback receipt, which still expects the pre-wildcard Lua.

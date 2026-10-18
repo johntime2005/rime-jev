@@ -1,10 +1,12 @@
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Installer.Common.ps1')
+Import-JevSecurityModule
 $data = Join-Path $env:LOCALAPPDATA 'RimeJev'
 if (-not (Test-Path -LiteralPath $data)) { throw 'Run Install.ps1 first.' }
 $config = Get-Content -LiteralPath (Join-Path $data 'config.json') -Raw | ConvertFrom-Json
 $endpoint = if ($config.provider.endpoint) { $config.provider.endpoint } else { 'https://api.typesafe.ai/v1/systemone' }
 Write-Host "Configured endpoint: $endpoint"
-Write-Host 'Only pressing F8 sends the current pinyin, first-page candidates and up to 80 recent committed characters.'
+Write-Host 'When enabled, automatic requests send pinyin and visible candidates. Preceding text is off by default.'
 Write-Host 'Your provider may charge for requests. Default cap: 200 attempts per UTC day. No automatic retries.'
 Write-Host 'Do NOT use this mode for passwords, verification codes or confidential text.'
 $answer = Read-Host 'Enable this cloud feature? Type YES to continue'

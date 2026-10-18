@@ -88,4 +88,4 @@ try {
     throw $failure
 }
 Write-Output "Installed. Backup: $backup"
-Write-Output 'F4 -> rime_ice_jev. F8 toggles automatic requests (off by default); Ctrl+Alt+F8 performs diagnostic refresh.'
+Write-Output 'F4 -> rime_ice_jev. Cloud requests are off until enabled; F8 toggles them.'

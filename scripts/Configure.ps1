@@ -1,5 +1,7 @@
 ﻿$ErrorActionPreference = 'Stop'
 try {
+    . (Join-Path $PSScriptRoot 'Installer.Common.ps1')
+    Import-JevSecurityModule
     $data = Join-Path $env:LOCALAPPDATA 'RimeJev'
     $configFile = Join-Path $data 'config.json'
     if (-not (Test-Path -LiteralPath $configFile)) { throw '尚未安装，请先运行 scripts\Install.ps1。' }
@@ -9,17 +11,19 @@ try {
     $oldModel = if ($current.model) { $current.model } else { 'jev-latest' }
     $oldAuth = if ($current.auth) { $current.auth } else { 'bearer' }
     $oldLimit = if ($config.callLimit) { [int]$config.callLimit } else { 200 }
+    $preferencesPath = Join-Path $data 'runtime\preferences'
+    $preference = if (Test-Path -LiteralPath $preferencesPath) { Get-Content -LiteralPath $preferencesPath -Raw } else { '' }
+    $preferenceLines = @($preference -split "\r?\n" | ForEach-Object { $_.Trim() })
+    $oldAuto = if ($preferenceLines.Count -ge 2 -and $preferenceLines[1] -match '^[01]$') { if ($preferenceLines[1] -eq '1') { 'y' } else { 'n' } } else { 'n' }
+    $oldContext = if ($preferenceLines.Count -ge 3 -and $preferenceLines[2] -match '^[01]$') { if ($preferenceLines[2] -eq '1') { 'y' } else { 'n' } } else { 'n' }
     Write-Host ''
     Write-Host '=== 小狼毫 Jev / OpenJev 配置 ==='
-    Write-Host '支持官方、中转或本地服务的 System One 兼容接口。'
-    Write-Host '如果混合路由在你的中转里完成，填写中转的统一入口即可。'
-    Write-Host '暂不支持仅提供 chat/completions 的接口，也不做客户端双服务切换。'
-    Write-Host '地址须填写完整请求端点，例如 https://你的中转/v1/systemone。'
-    Write-Host '按回车保留方括号中的现有值。'
+    Write-Host '填写服务地址、模型和密钥即可开始；回车保留现有值。'
+    Write-Host '填写完整 API 地址时保持原路径；只填域名或 /v1 时补全 /v1/systemone。'
     $value = Read-Host "服务端点 [$oldEndpoint]"
     $endpoint = if ($value.Trim()) { $value.Trim() } else { $oldEndpoint }
-    $uri = [Uri]$endpoint
-    $localHost = $uri.Host -in @('localhost','127.0.0.1','[::1]','::1')
+    $uri = Resolve-JevEndpoint $endpoint
+    $localHost = Test-JevLocalEndpoint $uri
     if (-not $uri.IsAbsoluteUri -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or
         ($uri.Scheme -ne 'https' -and -not ($localHost -and $uri.Scheme -eq 'http'))) {
         throw '远程服务必须用 HTTPS；HTTP 仅允许本机。地址不能包含密钥、查询参数或片段。'
@@ -27,41 +31,49 @@ try {
     $value = Read-Host "模型名（以服务端实际名称为准）[$oldModel]"
     $model = if ($value.Trim()) { $value.Trim() } else { $oldModel }
     if (-not $model -or $model.Length -gt 200) { throw '模型名无效。' }
-    $value = Read-Host "鉴权 bearer / none（none 仅本机）[$oldAuth]"
-    $auth = if ($value.Trim()) { $value.Trim().ToLowerInvariant() } else { $oldAuth }
+    $auth = 'bearer'
+    if ($localHost) {
+        $value = Read-Host "本机服务鉴权 bearer / none [$oldAuth]"
+        $auth = if ($value.Trim()) { $value.Trim().ToLowerInvariant() } else { $oldAuth }
+    }
     if ($auth -notin @('bearer','none') -or ($auth -eq 'none' -and -not $localHost)) { throw '鉴权设置无效。' }
-    $oldNone = if ($current -and $current.allowNone -eq $false) { 'n' } else { 'y' }
-    $value = Read-Host "包含“以上皆非”候选 y/n [$oldNone]"
-    $none = if ($value.Trim()) { $value.Trim().ToLowerInvariant() } else { $oldNone }
-    if ($none -notin @('y','n')) { throw '请输入 y 或 n。' }
-    $value = Read-Host "每天最多请求次数（UTC 日期，1-10000）[$oldLimit]"
+    $value = Read-Host "自动请求 y/n [$oldAuto]（开启后会发送拼音和候选）"
+    $auto = if ($value.Trim()) { $value.Trim().ToLowerInvariant() -eq 'y' } else { $oldAuto -eq 'y' }
+    if ($value.Trim() -and $value.Trim().ToLowerInvariant() -notin @('y','n')) { throw '请输入 y 或 n。' }
+    $none = if ($current -and $current.allowNone -eq $false) { 'n' } else { 'y' }
     $limit = $oldLimit
-    if ($value.Trim() -and -not [int]::TryParse($value.Trim(), [ref]$limit)) { throw '请求上限必须是整数。' }
-    if ($limit -lt 1 -or $limit -gt 10000) { throw '请求上限必须在 1-10000 之间。' }
     $debounce = if ($null -ne $config.debounceMs) { [int]$config.debounceMs } else { 100 }
-    $value = Read-Host "防抖毫秒 0-2000 [$debounce]（40 更快，但可能增加中间拼音请求和费用；不是总延迟）"
-    if ($value.Trim() -and -not [int]::TryParse($value.Trim(), [ref]$debounce)) { throw '防抖必须是整数。' }
-    if ($debounce -lt 0 -or $debounce -gt 2000) { throw '防抖必须在 0-2000 之间。' }
-    $value = Read-Host '自动请求 y/n [n]（开启后普通拼音也会发送；默认关闭）'
-    $auto = $value.Trim().ToLowerInvariant() -eq 'y'
-    if ($value.Trim() -and $value.Trim().ToLowerInvariant() -notin @('y','n')) { throw '请输入 y 或 n。' }
-    $value = Read-Host '发送光标前上文 y/n [n]（默认关闭；仅限明确配置的 TSF 应用或 Pebrel 适配，不使用提交历史）'
-    $context = $value.Trim().ToLowerInvariant() -eq 'y'
-    if ($value.Trim() -and $value.Trim().ToLowerInvariant() -notin @('y','n')) { throw '请输入 y 或 n。' }
+    $context = $oldContext -eq 'y'
     $documentContext = $config.contextProvider
+    if ((Read-Host '更改请求上限、防抖、上文和候选选项？[y/N]') -match '^(?i:y|yes)$') {
+        $value = Read-Host "每天最多请求次数 [$limit]"
+        if ($value.Trim() -and -not [int]::TryParse($value.Trim(), [ref]$limit)) { throw '请求上限必须是整数。' }
+        if ($limit -lt 1 -or $limit -gt 10000) { throw '请求上限必须在 1-10000 之间。' }
+        $value = Read-Host "防抖毫秒 [$debounce]"
+        if ($value.Trim() -and -not [int]::TryParse($value.Trim(), [ref]$debounce)) { throw '防抖必须是整数。' }
+        if ($debounce -lt 0 -or $debounce -gt 2000) { throw '防抖必须在 0-2000 之间。' }
+        $value = Read-Host "包含“以上皆非”候选 y/n [$none]"
+        $none = if ($value.Trim()) { $value.Trim().ToLowerInvariant() } else { $none }
+        if ($none -notin @('y','n')) { throw '请输入 y 或 n。' }
+        $value = Read-Host "发送光标前上文 y/n [$oldContext]"
+        $context = if ($value.Trim()) { $value.Trim().ToLowerInvariant() -eq 'y' } else { $oldContext -eq 'y' }
+        if ($value.Trim() -and $value.Trim().ToLowerInvariant() -notin @('y','n')) { throw '请输入 y 或 n。' }
+    }
     if ($context) {
         Write-Host 'Pebrel/Codex 可通过本地 Runtime 读取当前输入区，最多发送光标前 80 字；不发送终端输出。'
-        Write-Host '当前版本需读取可见终端文本格，短暂保存在后台内存，可能增加约 2 秒读取/复核延迟。'
-        $value = Read-Host '启用 Pebrel/Codex 真实输入区上文 y/n [n]（读不到时保留原候选，不使用旧提交历史）'
+        $pebrelDefault = if ($documentContext) { 'y' } else { 'n' }
+        $value = Read-Host "启用 Pebrel/Codex 输入区上文 y/n [$pebrelDefault]"
         if ($value.Trim() -and $value.Trim().ToLowerInvariant() -notin @('y','n')) { throw '请输入 y 或 n。' }
-        $documentContext = $null
-        if ($value.Trim().ToLowerInvariant() -eq 'y') {
+        $usePebrel = if ($value.Trim()) { $value.Trim().ToLowerInvariant() -eq 'y' } else { $pebrelDefault -eq 'y' }
+        if ($usePebrel) {
             $cli = $env:PEBREL_CLI
             if (-not $cli) { $cli = Read-Host 'Pebrel 可执行文件的完整路径（pebrel.exe）' }
             if (-not [IO.Path]::IsPathRooted($cli) -or -not (Test-Path -LiteralPath $cli -PathType Leaf) -or
                 [IO.Path]::GetFileName($cli) -ine 'pebrel.exe') { throw 'Pebrel 路径无效。' }
             $documentContext = @{ type='pebrel-codex'; cli=$cli }
-        }
+        } else { $documentContext = $null }
+    } else {
+        $documentContext = $null
     }
     $keyFile = Join-Path $data 'key.dpapi'
     $changed = $uri.AbsoluteUri -cne ([Uri]$oldEndpoint).AbsoluteUri -or $auth -ne $oldAuth
@@ -74,14 +86,10 @@ try {
         if ($key.Length -gt 0) { $encryptedKey = $key | ConvertFrom-SecureString }
         elseif (-not $canKeepKey) { throw '未输入密钥，取消配置；原配置未改变。' }
     }
-    Write-Host ''
-    Write-Host "端点：$($uri.AbsoluteUri)"
-    Write-Host "模型：$model；鉴权：$auth；每日请求上限：$limit"
-    Write-Host "F8 是持久化开关；自动请求有 ${debounce}ms 防抖，失败保留原候选。"
-    Write-Host '开启后发送拼音和首屏候选；上文仅在你另行开启时发送。费用由你的服务决定。'
-    Write-Host '标准小狼毫不支持停笔刷新；实验版仅 x64 TSF 支持，完整界面验收仍待完成。'
-    Write-Host '不要在密码、验证码或保密文本中触发。密钥仅以 Windows DPAPI 加密保存。'
-    if ((Read-Host '保存并重启？输入 YES 确认') -cne 'YES') {
+    Write-Host "`n端点：$($uri.AbsoluteUri)"
+    Write-Host "模型：$model；每日上限：$limit；自动请求：$(if ($auto) { '开' } else { '关' })"
+    if ($auto) { Write-Host '自动请求会将拼音和首屏候选发送到该服务；密码及保密输入请勿使用。' }
+    if ((Read-Host '保存并重启？[Y/n]') -match '^(?i:n|no)$') {
         Write-Host '已取消，原配置未改变。'
         return
     }
@@ -106,12 +114,23 @@ try {
         throw
     }
     $pref = "JEVPREF1`n$(if ($auto) { '1' } else { '0' })`n$(if ($context) { '1' } else { '0' })`n"
-    [IO.File]::WriteAllText((Join-Path $data 'runtime\preferences'), $pref, [Text.Encoding]::ASCII)
-    & (Join-Path $PSScriptRoot 'Start-Bridge.ps1')
+    $savedPreferences = if (Test-Path -LiteralPath $preferencesPath) { [IO.File]::ReadAllBytes($preferencesPath) } else { $null }
+    [IO.File]::WriteAllText($preferencesPath, $pref, [Text.Encoding]::ASCII)
+    try { & (Join-Path $PSScriptRoot 'Start-Bridge.ps1') }
+    catch {
+        # A bad endpoint or model must not leave the bridge unusable. Restore
+        # the last known-good files before attempting to restart it.
+        [IO.File]::WriteAllBytes($configFile, $savedConfig)
+        if ($null -ne $savedKey) { [IO.File]::WriteAllBytes($keyFile, $savedKey) }
+        elseif (Test-Path -LiteralPath $keyFile) { Remove-Item -LiteralPath $keyFile -Force }
+        if ($null -ne $savedPreferences) { [IO.File]::WriteAllBytes($preferencesPath, $savedPreferences) }
+        else { Remove-Item -LiteralPath $preferencesPath -Force -ErrorAction SilentlyContinue }
+        & (Join-Path $PSScriptRoot 'Start-Bridge.ps1')
+        throw '新配置未能启动后台服务，已恢复原配置。'
+    }
     Start-Sleep -Seconds 2
     & (Join-Path $PSScriptRoot 'Status.ps1')
-    Write-Host '已保存。F4 选择“雾凇拼音 - Jev”，用非敏感文本测试；F8 开关，Ctrl+Alt+F8 诊断读取。'
-    Write-Host 'live 只表示服务已启用，真实 API 是否成功需看一次实际请求结果。'
+    Write-Host '已保存。切换到“雾凇拼音 - Jev”即可使用；F8 可切换自动请求。'
 } catch {
     Write-Host ('配置失败：' + $_.Exception.Message) -ForegroundColor Red
     exit 1

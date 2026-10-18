@@ -46,7 +46,8 @@ class Commit(C.Structure):
     _fields_ = [('data_size', C.c_int), ('text', C.c_char_p)]
 
 
-def _run(project, root, typing_profile=False, nasal_profile=False, pebrel_context=False, context_test=False):
+def _run(project, root, typing_profile=False, nasal_profile=False, pebrel_context=False, context_test=False,
+         context_wildcard=False):
     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\WOW6432Node\Rime\Weasel') as k:
         install = Path(winreg.QueryValueEx(k, 'WeaselRoot')[0])
     user = Path(os.environ['APPDATA']) / 'Rime'
@@ -58,8 +59,11 @@ def _run(project, root, typing_profile=False, nasal_profile=False, pebrel_contex
     shutil.copy2(project / 'lua/jev_windows.lua', data / 'lua/jev_windows.lua')
     schema = (project / 'rime_ice_jev.schema.yaml').read_text()
     schema += '\n  - jev_windows/runtime_dir: ' + json.dumps((bridge_root / 'runtime').as_posix()) + '\n'
+    # Full-page assertions must not inherit the host's personal page size.
+    schema += '  - menu/page_size: 7\n'
     if context_test:
-        schema = schema.replace('jev_windows/context_apps: []', 'jev_windows/context_apps: [jev-context-test.exe]')
+        apps = '["*"]' if context_wildcard else '[jev-context-test.exe, partial-*.exe]'
+        schema = schema.replace('jev_windows/context_apps: []', 'jev_windows/context_apps: ' + apps)
     (data / 'rime_ice_jev.schema.yaml').write_text(schema)
     if typing_profile or nasal_profile:
         spec = importlib.util.spec_from_file_location('typing_profile', project / 'scripts/Typing-Profile.py')
@@ -150,6 +154,13 @@ def _run(project, root, typing_profile=False, nasal_profile=False, pebrel_contex
                     if files: return files[0]
                     time.sleep(.04)
                 raise AssertionError('no result')
+            for app, allowed in (('JEV-CONTEXT-TEST.EXE', True), ('unlisted.exe', context_wildcard),
+                                 ('partial-test.exe', context_wildcard), ('', False)):
+                prop('client_app', app)
+                prop('jev_context_query', 'policy-' + app)
+                assert getprop('jev_context_consent') == ('1' if allowed else '0'), (
+                    'incorrect application consent', app, context_wildcard)
+            prop('client_app', 'jev-context-test.exe')
             prop('jev_context', 'pending')
             for letter in 'jingli': key(letter)
             original = menu()
@@ -258,16 +269,25 @@ def _run(project, root, typing_profile=False, nasal_profile=False, pebrel_contex
             assert not list(inbox.glob('*.json')), 'sensitive context must not submit'
             prop('client_app', 'unlisted.exe')
             prop('jev_context_query', 'unlisted')
-            assert getprop('jev_context_consent') == '0'
-            preferences.write_text('JEVPREF1\n0\n0\n', encoding='ascii', newline='\n')
-            prop('jev_context_query', 'disabled')
-            assert getprop('jev_context_consent') == '0'
+            assert getprop('jev_context_consent') == ('1' if context_wildcard else '0')
+            prop('jev_context', wire('1-1-5', prefix))
+            prop('jev_refresh', 'other-app-document')
+            submitted = json.loads(next(inbox.glob('*.json')).read_text(encoding='utf-8'))
+            assert submitted['context'] == (prefix if context_wildcard else ''), (
+                'application policy not enforced when forwarding text', context_wildcard)
+            key(65307)
+            for enabled, context in (('0', '1'), ('1', '0'), ('0', '0')):
+                preferences.write_text(f'JEVPREF1\n{enabled}\n{context}\n', encoding='ascii', newline='\n')
+                prop('jev_context_query', 'disabled-' + enabled + context)
+                assert getprop('jev_context_consent') == '0', 'wildcard bypassed preference gates'
             print(json.dumps({'native_context_lua': 'PASS', 'exact_whitespace_unicode': True,
                 'stale_document_rejected': True, 'native_only_consumption': True,
                 'displayed_winner_committed': True, 'consent_and_sensitive_gates': True,
                 'manual_selection_survives_context_change': True,
                 'manual_clear_survives_modifiers': True,
                 'context_only_capture_does_not_rewrite_pending_preedit': True,
+                'context_wildcard': context_wildcard, 'application_policy_checked': True,
+                'unknown_app_denied': True, 'preference_gates_checked': True,
                 'live_tsf_gui_tested': False, 'provider_calls': 0, 'root': str(root)}, indent=2))
             return
         if pebrel_context:
@@ -595,12 +615,14 @@ def _run(project, root, typing_profile=False, nasal_profile=False, pebrel_contex
         child.wait(timeout=5)
 
 
-def run(typing_profile=False, nasal_profile=False, pebrel_context=False, context_test=False, keep_build=False):
+def run(typing_profile=False, nasal_profile=False, pebrel_context=False, context_test=False, keep_build=False,
+        context_wildcard=False):
     project = Path(__file__).resolve().parents[1]
     runtime = (project / 'runtime').resolve()
     root = runtime / ('native-' + uuid.uuid4().hex[:8])
     try:
-        return _run(project, root, typing_profile, nasal_profile, pebrel_context, context_test)
+        return _run(project, root, typing_profile, nasal_profile, pebrel_context,
+                    context_test or context_wildcard, context_wildcard)
     finally:
         # Keep the small diagnostic records, not another 100 MiB compiled dictionary copy.
         build = root / 'rime/build'
@@ -618,6 +640,8 @@ if __name__ == '__main__':
     profiles.add_argument('--nasal-profile', action='store_true')
     profiles.add_argument('--pebrel-context', action='store_true')
     profiles.add_argument('--context', action='store_true')
+    profiles.add_argument('--context-wildcard', action='store_true')
     parser.add_argument('--keep-build', action='store_true', help='Keep compiled dictionaries for debugging (about 100 MiB per run).')
     args = parser.parse_args()
-    run(args.typing_profile, args.nasal_profile, args.pebrel_context, args.context, args.keep_build)
+    run(args.typing_profile, args.nasal_profile, args.pebrel_context, args.context, args.keep_build,
+        args.context_wildcard)

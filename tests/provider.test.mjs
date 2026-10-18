@@ -51,12 +51,40 @@ test('default provider sends joined fragments once but still accepts a legitimat
 
 test('validates endpoint and auth without silently downgrading TLS', () => {
   assert.equal(providerConfig().model, 'jev-latest');
+  assert.equal(providerConfig({ endpoint: 'https://relay.example' }).endpoint, 'https://relay.example/v1/systemone');
+  assert.equal(providerConfig({ endpoint: 'https://relay.example/v1/systemone' }).endpoint,
+    'https://relay.example/v1/systemone');
+  assert.equal(providerConfig({ endpoint: 'https://relay.example/v1' }).endpoint, 'https://relay.example/v1/systemone');
+  assert.equal(providerConfig({ endpoint: 'https://relay.example/v1/' }).endpoint, 'https://relay.example/v1/systemone');
+  for (const endpoint of ['https://emrank.tech/v1/decisions', 'https://relay.example/custom/decisions',
+    'https://relay.example/v1/systemone/', 'http://localhost:8080/custom/decisions']) {
+    assert.equal(providerConfig({ endpoint }).endpoint, endpoint);
+  }
+  assert.throws(() => providerConfig({ endpoint: 'not a url' }), /Invalid provider endpoint/);
   assert.equal(providerConfig({ endpoint: 'http://127.0.0.1:8080/v1/systemone', auth: 'none' }).auth, 'none');
   for (const config of [ { endpoint: 'http://example.org/v1/systemone' },
     { endpoint: 'https://key@example.org/' }, { endpoint: 'https://example.org/?key=secret' },
     { endpoint: 'https://example.org/', auth: 'none' }, { protocol: 'chat' } ]) {
     assert.throws(() => providerConfig(config));
   }
+});
+
+test('decisions endpoint receives the exact route and namespaced model with full Choice validation', async () => {
+  const provider = providerConfig({ endpoint: 'https://emrank.tech/v1/decisions', model: 'typesafe/jev-latest' });
+  let calls = 0;
+  const client = providerClient(provider, { apiKey: 'fixture-only', callLimit: 1, timeoutMs: 1000,
+    fetchImpl: async (url, options) => {
+      calls++;
+      assert.equal(url, 'https://emrank.tech/v1/decisions');
+      assert.equal(JSON.parse(options.body).model, 'typesafe/jev-latest');
+      assert.equal(options.redirect, 'error');
+      return { ok: true, json: async () => ({ model: 'typesafe/jev-latest', usage: { input_tokens: 1, output_tokens: 0 },
+        answers: { next_candidate: { type: 'choice', choice: 'c2', confidence: 1,
+          probabilities: { c1: 0, c2: 1, none_of_the_above: 0 } } } }) };
+    } });
+  const result = await client.rank(snapshot, '', { confirmLive: true });
+  assert.equal(result.ranked[0].id, 'c2');
+  assert.equal(calls, 1);
 });
 
 test('relay receives its own key and configured model, not official endpoint', async () => {

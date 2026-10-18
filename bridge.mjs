@@ -421,7 +421,7 @@ export async function startBridge({ root, apiKey = '', mock = false, callLimit =
         await respond(r, filename, 'abstain', 'UNCHANGED', timing).catch(() => {});
         return;
       }
-      lastError = /^[A-Z_]+$/.test(error.code ?? '') ? error.code : 'INVALID_REQUEST';
+      lastError = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'INVALID_REQUEST';
       if (r && safeId(r.id) && Array.isArray(r.candidates) && r.instance === instance && r.token === token) {
         requestState = { phase: 'publish', startedAt: Date.now() };
         statusDirty = true;

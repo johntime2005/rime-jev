@@ -198,6 +198,11 @@ local function visible_signature(ctx, count)
   return table.concat(parts, '|')
 end
 
+local function context_allowed(state, app)
+  -- Only a standalone '*' opts in all named apps; unknown hosts stay denied.
+  return app ~= '' and (state.context_apps['*'] or state.context_apps[app])
+end
+
 local function prepare(buffer, env)
   local state, ctx = env.state, env.engine.context
   if not state then return nil end
@@ -221,7 +226,7 @@ local function prepare(buffer, env)
     state.context_pending_since = nil
   end
   local app_name = ctx:get_property('client_app'):lower()
-  if not state.use_context or state.context_suppressed or not state.context_apps[app_name] then
+  if not state.use_context or state.context_suppressed or not context_allowed(state, app_name) then
     doc.text = ''
     if doc.quality == 'exact' then doc.quality = 'unavailable' end
   end
@@ -345,7 +350,7 @@ function M.processor.init(env)
       settings(state)
       local app = c:get_property('client_app'):lower()
       c:set_property('jev_context_consent', state.enabled and state.use_context
-        and not state.context_suppressed and state.context_apps[app] and '1' or '0')
+        and not state.context_suppressed and context_allowed(state, app) and '1' or '0')
     elseif name == 'jev_context' then
       local wire = c:get_property(name)
       if wire ~= state.context_wire then

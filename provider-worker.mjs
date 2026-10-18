@@ -39,7 +39,7 @@ parentPort.on('message', async ({ id, type, snapshot, context }) => {
       noneProbability: result.noneProbability, timings: { ...timings, totalMs: Math.round(performance.now() - started) },
       ranked: result.ranked.map(({ originalRank, probability }) => ({ originalRank, probability })) } };
   } catch (error) {
-    reply = { id, error: /^[A-Z_]+$/.test(error.code ?? '') ? error.code : 'PROVIDER_WORKER_FAILED' };
+    reply = { id, error: /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'PROVIDER_WORKER_FAILED' };
   } finally { active = null; }
   // This acknowledgement follows completion/abort of the entire body read,
   // not just receipt of the cancel command.

@@ -47,6 +47,7 @@ Remove-Item Env:TYPESAFE_API_KEY -ErrorAction SilentlyContinue
 try {
     if (Test-Path -LiteralPath $secretFile) {
         try {
+            Import-JevSecurityModule
             $secure = (Get-Content -LiteralPath $secretFile -Raw).Trim() | ConvertTo-SecureString
             $cred = New-Object System.Net.NetworkCredential('', $secure)
             $env:TYPESAFE_API_KEY = $cred.Password

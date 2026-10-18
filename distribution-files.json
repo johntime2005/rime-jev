@@ -37,6 +37,7 @@
   "scripts/Switch-Native.ps1",
   "scripts/Rollback-Native.ps1",
   "scripts/Check-Context.mjs",
+  "scripts/Measure-Rerank.mjs",
   "scripts/Typing-Profile.py",
   "native/README.md",
   "native/CONTEXT.md",

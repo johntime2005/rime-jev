@@ -5,9 +5,10 @@ param(
     [switch]$WithoutNoneOption
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Installer.Common.ps1')
 $data = Join-Path $env:LOCALAPPDATA 'RimeJev'
-$uri = [Uri]$Endpoint
-$localHost = $uri.Host -in @('localhost','127.0.0.1','[::1]','::1')
+$uri = Resolve-JevEndpoint $Endpoint
+$localHost = Test-JevLocalEndpoint $uri
 if (-not $uri.IsAbsoluteUri -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or
     ($uri.Scheme -ne 'https' -and -not ($localHost -and $uri.Scheme -eq 'http'))) {
     throw 'Use HTTPS or local HTTP, no URL credentials/query/fragment.'

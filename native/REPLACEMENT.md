@@ -1,5 +1,26 @@
 # Native replacement handoff
 
+## Explicit wildcard context update (2026-10-11)
+
+At 15:58 local, after the user explicitly requested all applications, deployed
+the tested Lua wildcard support and a new personal profile containing
+`jev_windows/context_apps: ["*"]`. The generic schema remains default-deny.
+The wildcard does not bypass preference gates, Ctrl+F8 suppression, sensitive
+scope checks or document validation; it cannot make unsupported controls
+provide TSF text. Native binaries, provider, key and preferences are unchanged.
+
+The compiled schema contains `"*"`, installed Lua matches the tested source,
+and nine protected hashes were checked. The bridge restarted normally.
+This is not actual GUI ranking acceptance; see `VALIDATION.md` for tests.
+
+Pre-change Lua/installation manifest, deployment receipt and hash-guarded
+rollback helper are at
+`%LOCALAPPDATA%/RimeJev/backups/all-app-context-20261011-155826`.
+The updater also retained its usual `update-20261011-155826-5125e0c4` backup.
+`Rollback-AllAppContext.ps1 -Check` passed without restoring anything.
+Restore this layer before using the older manual native replacement receipt;
+its original bundle and rollback hashes were not rewritten for this update.
+
 ## Bridge-only transport update (2026-10-10)
 
 At approximately 10:05 local, restarted only the ordinary Jev bridge from this

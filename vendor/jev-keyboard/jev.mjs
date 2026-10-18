@@ -167,7 +167,7 @@ export class JevClient {
       });
       if (!response.ok) {
         const code = response.status;
-        throw new AppError(`Jev 返回 HTTP ${code}。未自动重试，未切换到其他服务商。`, 'PROVIDER_ERROR', 502);
+        throw new AppError(`Jev 返回 HTTP ${code}。未自动重试，未切换到其他服务商。`, `PROVIDER_HTTP_${code}`, 502);
       }
       let raw;
       try { raw = await response.json(); } catch { throw new AppError('Jev 未返回有效 JSON。', 'INVALID_PROVIDER_RESPONSE', 502); }
@@ -181,7 +181,7 @@ export class JevClient {
       if (signal?.aborted) throw new AppError('输入已变化，请求已取消。', 'CANCELLED', 499);
       if (controller.signal.aborted) throw new AppError('Jev 请求超时；服务商可能已处理请求，未自动重试。', 'TIMEOUT', 504);
       if (error instanceof AppError) throw error;
-      throw new AppError('无法连接官方 Jev API；已停止，不回退到其他域名。', 'NETWORK_ERROR', 502);
+      throw new AppError('无法连接已配置的 Jev 服务；未自动切换到其他地址。', 'NETWORK_ERROR', 502);
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);

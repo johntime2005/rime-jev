@@ -4,7 +4,8 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { atomicWrite } from '../bridge.mjs';
 
-if (!process.argv.includes('--live')) throw new Error('Pass --live to send synthetic requests; --repeat submits the three cases twice.');
+if (!process.argv.includes('--live')) throw new Error('Pass --live to send synthetic requests; --single sends one case, --repeat submits the three cases twice.');
+if (process.argv.includes('--single') && process.argv.includes('--repeat')) throw new Error('Use --single or --repeat, not both.');
 const root = path.join(process.env.LOCALAPPDATA, 'RimeJev');
 const runtime = path.join(root, 'runtime');
 const [protocol, instance, token, mode, heartbeat] = (await fs.readFile(path.join(runtime, 'bridge.info'), 'utf8')).trim().split('\n');
@@ -25,6 +26,7 @@ const cases = process.argv.includes('--continuation-check') ? continuationCases 
   { pinyin: 'shishi', context: '\u8fd9\u9879\u653f\u7b56\u5c06\u4e8e\u660e\u5929\u6b63\u5f0f', candidates: ['\u4e8b\u5b9e', '\u5b9e\u65bd', '\u65f6\u4e8b'] },
   { pinyin: 'quanli', context: '\u6cd5\u5f8b\u4fdd\u969c\u6bcf\u4e2a\u516c\u6c11\u7684\u5408\u6cd5', candidates: ['\u6743\u529b', '\u6743\u5229', '\u5168\u529b'] },
 ];
+if (process.argv.includes('--single')) cases.splice(1);
 if (process.argv.includes('--repeat')) cases.push(...cases.slice());
 const session = `probe_${randomBytes(8).toString('hex')}`;
 for (const [index, sample] of cases.entries()) {
@@ -59,6 +61,7 @@ for (const [index, sample] of cases.entries()) {
       source: metrics?.source, cacheAgeMs: metrics?.cacheAgeMs, localMs: metrics?.localMs, transport: metrics?.transport,
       discoveryMs: metrics?.discoveryMs,
       providerMs: metrics?.providerMs, readyMs: metrics?.readyMs, guiTested: false }));
+    if (!['ok', 'abstain'].includes(rows?.[3])) process.exitCode = 1;
   } finally {
     await fs.rm(input, { force: true });
     await fs.rm(output, { force: true });

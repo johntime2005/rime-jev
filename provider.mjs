@@ -18,7 +18,12 @@ export function continuationRequest(request) {
 }
 
 export function providerConfig(input = {}) {
-  const endpoint = new URL(input.endpoint ?? API_URL);
+  let endpoint;
+  try { endpoint = new URL(input.endpoint ?? API_URL); }
+  catch { throw new Error('Invalid provider endpoint'); }
+  // Accept the service origin as a convenience, while keeping one explicit
+  // request path internally so the transport cannot silently change APIs.
+  if (['', '/', '/v1', '/v1/'].includes(endpoint.pathname)) endpoint.pathname = '/v1/systemone';
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname);
   if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash
     || (endpoint.protocol !== 'https:' && !(local && endpoint.protocol === 'http:'))) {

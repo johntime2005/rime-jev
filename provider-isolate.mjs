@@ -80,7 +80,7 @@ export class IsolatedProvider {
             return;
           }
           if (reply.error) {
-            const code = /^[A-Z_]+$/.test(reply.error) ? reply.error : 'PROVIDER_WORKER_FAILED';
+            const code = /^[A-Z0-9_]+$/.test(reply.error) ? reply.error : 'PROVIDER_WORKER_FAILED';
             finish(failure(code), null, true);
           } else if (reply.result) {
             finish(null, reply.result);
